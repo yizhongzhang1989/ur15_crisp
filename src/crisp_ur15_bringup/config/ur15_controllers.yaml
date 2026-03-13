@@ -266,12 +266,19 @@ cartesian_impedance_controller:
       k_pos_x: 600.0
       k_pos_y: 600.0
       k_pos_z: 600.0
+      d_pos_x: 200.0              # heavy Cartesian damping for UR15
+      d_pos_y: 200.0
+      d_pos_z: 200.0
       k_rot_x: 30.0
       k_rot_y: 30.0
       k_rot_z: 30.0
+      d_rot_x: 30.0
+      d_rot_y: 30.0
+      d_rot_z: 30.0
     nullspace:
       stiffness: 5.0
-      damping: -1.0
+      damping: 15.0
+    max_delta_tau: 0.5
     use_friction: false
     use_coriolis_compensation: false  # UR handles internally
     use_gravity_compensation: false   # UR handles internally
@@ -279,7 +286,11 @@ cartesian_impedance_controller:
     limit_error: true
     limit_torques: true
 
-# Joint impedance controller: track target_joint with per-joint stiffness
+# Joint impedance controller: track target_joint with per-joint stiffness.
+# NOTE: effective per-joint stiffness = nullspace.stiffness * weight
+#       effective per-joint damping   = nullspace.damping   * weight
+# For UR15 shoulder (inertia ~10-30 kg·m²): want ~50 Nm/rad stiffness, ~40 Nm·s/rad damping
+# For UR15 wrist   (inertia ~0.1-0.5 kg·m²): want ~10 Nm/rad stiffness, ~5 Nm·s/rad damping
 joint_impedance_controller:
   ros__parameters:
     joints:
@@ -291,6 +302,10 @@ joint_impedance_controller:
       - wrist_3_joint
     end_effector_frame: tool0
     base_frame: base_link
+    filter:
+      q: 0.5
+      dq: 0.5
+      output_torque: 0.5
     task:
       k_pos_x: 0.0
       k_pos_y: 0.0
@@ -300,18 +315,18 @@ joint_impedance_controller:
       k_rot_z: 0.0
     max_delta_tau: 0.5
     nullspace:
-      stiffness: 90.0
+      stiffness: 10.0             # conservative (effective = 10 * weight)
       projector_type: none
-      damping: 35.0
-      max_tau: 1200.0
+      damping: 8.0                # overdamped ratio for safety
+      max_tau: 50.0               # cap per-joint nullspace torque
       regularization: 1.0e-06
       weights:
-        shoulder_pan_joint.value: 300.0
-        shoulder_lift_joint.value: 300.0
-        elbow_joint.value: 300.0
-        wrist_1_joint.value: 300.0
-        wrist_2_joint.value: 300.0
-        wrist_3_joint.value: 300.0
+        shoulder_pan_joint.value: 5.0    # effective: k=50, d=40
+        shoulder_lift_joint.value: 5.0
+        elbow_joint.value: 5.0
+        wrist_1_joint.value: 1.0         # effective: k=10, d=8
+        wrist_2_joint.value: 1.0
+        wrist_3_joint.value: 1.0
     use_friction: false
     use_coriolis_compensation: false  # UR handles internally
     use_gravity_compensation: false   # UR handles internally
