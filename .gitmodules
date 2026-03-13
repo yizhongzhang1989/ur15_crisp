@@ -1,3 +1,4 @@
 [submodule "src/crisp_controllers"]
 	path = src/crisp_controllers
 	url = https://github.com/utiasDSL/crisp_controllers.git
+	shallow = true

@@ -145,11 +145,11 @@ ur15_crisp/                              # ← this repo (colcon workspace root)
 ### 2.2 Clone repo with CRISP controllers submodule
 ```bash
 # Fresh clone (new machine):
-git clone --recurse-submodules https://github.com/yizhongzhang1989/ur15_crisp.git
+git clone --recurse-submodules --shallow-submodules https://github.com/yizhongzhang1989/ur15_crisp.git
 cd ur15_crisp
 
 # Or if already cloned without submodules:
-git submodule update --init --recursive
+git submodule update --init --depth 1
 ```
 
 > **Note**: `crisp_controllers` is pinned as a git submodule at `src/crisp_controllers` (v2.1.0).

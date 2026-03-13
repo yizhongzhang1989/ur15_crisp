@@ -2,28 +2,36 @@
 
 ROS 2 workspace for testing the UR15 robot arm with [CRISP controllers](https://github.com/utiasDSL/crisp_controllers) — compliant, torque-based Cartesian and joint-space controllers for `ros2_control`.
 
+## Prerequisites (New Machine)
+
+- **Ubuntu 22.04** with **ROS 2 Humble** installed (`ros-humble-desktop`)
+- **UR robot driver**: `sudo apt install -y ros-humble-ur-robot-driver`
+- **16+ GB RAM** recommended (CRISP compiles heavy C++ templates; use `-j1` if RAM < 16 GB)
+- **Network**: Direct Ethernet to UR15 at `192.168.1.15` (host IP: `192.168.1.2` on same subnet)
+- **UR15 teach pendant**: "External Control" URCap installed, Host IP set to `192.168.1.2`, port `50002`
+
 ## Quick Start (New Machine)
 
 ```bash
-# 1. Clone with submodules
-git clone --recurse-submodules https://github.com/yizhongzhang1989/ur15_crisp.git
+# 1. Clone with submodules (shallow to skip large media history)
+git clone --recurse-submodules --shallow-submodules https://github.com/yizhongzhang1989/ur15_crisp.git
 cd ur15_crisp
 
 # 2. Source ROS 2
 source /opt/ros/humble/setup.bash
 
 # 3. Install system dependencies
-sudo apt install -y ros-humble-pinocchio ros-humble-generate-parameter-library
+sudo apt install -y ros-humble-ur-robot-driver ros-humble-pinocchio ros-humble-generate-parameter-library
 rosdep install --from-paths src --ignore-src -r -y
 
-# 4. Build (use -j1 on machines with < 16 GB RAM)
+# 4. Build (use -j1 if RAM < 16 GB to avoid OOM)
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 source install/setup.bash
 
-# 5. Launch with mock hardware (test)
+# 5. Launch with mock hardware (verify build works)
 ros2 launch crisp_ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true
 
-# 6. Launch with real UR15
+# 6. Launch with real UR15 (start External Control on teach pendant first)
 ros2 launch crisp_ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
 ```
 
