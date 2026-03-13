@@ -198,7 +198,11 @@ crisp_pose_broadcaster:
 # CRISP Controller parameters
 # ============================================================
 
-# Gravity compensation mode: zero Cartesian stiffness, robot becomes "weightless"
+# Gravity compensation / freedrive mode.
+# IMPORTANT: UR robots handle gravity compensation INTERNALLY in their controller.
+# Effort commands sent via ros2_control are ADDITIVE to the UR's internal gravity comp.
+# Therefore use_gravity_compensation and use_coriolis_compensation must be FALSE
+# to avoid double-compensating (which causes the robot to accelerate).
 gravity_compensation:
   ros__parameters:
     joints:
@@ -210,21 +214,37 @@ gravity_compensation:
       - wrist_3_joint
     end_effector_frame: tool0
     base_frame: base_link
+    filter:
+      q: 0.2
+      dq: 0.2
+      output_torque: 0.05
     task:
       k_pos_x: 0.0
       k_pos_y: 0.0
       k_pos_z: 0.0
-      k_rot_x: 30.0
-      k_rot_y: 30.0
-      k_rot_z: 30.0
+      d_pos_x: 80.0              # Cartesian damping (resist translational drift)
+      d_pos_y: 80.0
+      d_pos_z: 80.0
+      k_rot_x: 0.0
+      k_rot_y: 0.0
+      k_rot_z: 0.0
+      d_rot_x: 15.0              # rotational damping
+      d_rot_y: 15.0
+      d_rot_z: 15.0
     nullspace:
-      stiffness: 0.0
-    use_friction: true
-    use_coriolis_compensation: true
-    use_gravity_compensation: true
+      stiffness: 5.0
+      damping: 10.0
+      max_tau: 5.0
+    max_delta_tau: 0.3
+    stop_commands: false
+    use_friction: false
+    use_coriolis_compensation: false  # UR handles internally
+    use_gravity_compensation: false   # UR handles internally
     use_local_jacobian: true
     limit_error: true
     limit_torques: true
+    log:
+      computed_torques: true
 
 # Cartesian impedance controller: track target_pose with configurable stiffness
 cartesian_impedance_controller:
@@ -253,8 +273,8 @@ cartesian_impedance_controller:
       stiffness: 5.0
       damping: -1.0
     use_friction: false
-    use_coriolis_compensation: true
-    use_gravity_compensation: true
+    use_coriolis_compensation: false  # UR handles internally
+    use_gravity_compensation: false   # UR handles internally
     use_local_jacobian: true
     limit_error: true
     limit_torques: true
@@ -293,8 +313,8 @@ joint_impedance_controller:
         wrist_2_joint.value: 300.0
         wrist_3_joint.value: 300.0
     use_friction: false
-    use_coriolis_compensation: false
-    use_gravity_compensation: true
+    use_coriolis_compensation: false  # UR handles internally
+    use_gravity_compensation: false   # UR handles internally
     use_local_jacobian: true
     limit_error: true
     limit_torques: true
