@@ -121,7 +121,7 @@ ros2 launch ur_robot_driver test_scaled_joint_trajectory_controller.launch.py
 ```
 ur15_crisp/                              # ← this repo (colcon workspace root)
 ├── src/
-│   ├── crisp_controllers/               # cloned from utiasDSL/crisp_controllers
+│   ├── crisp_controllers/               # [git submodule] utiasDSL/crisp_controllers
 │   │   ├── CMakeLists.txt
 │   │   ├── package.xml
 │   │   ├── crisp_controllers.xml        # pluginlib plugin descriptor
@@ -142,12 +142,18 @@ ur15_crisp/                              # ← this repo (colcon workspace root)
 └── README.md
 ```
 
-### 2.2 Clone CRISP controllers into `src/`
+### 2.2 Clone repo with CRISP controllers submodule
 ```bash
-cd ~/Documents/ur15_crisp
-mkdir -p src
-git clone https://github.com/utiasDSL/crisp_controllers.git src/crisp_controllers
+# Fresh clone (new machine):
+git clone --recurse-submodules https://github.com/yizhongzhang1989/ur15_crisp.git
+cd ur15_crisp
+
+# Or if already cloned without submodules:
+git submodule update --init --recursive
 ```
+
+> **Note**: `crisp_controllers` is pinned as a git submodule at `src/crisp_controllers` (v2.1.0).
+> To update to a newer version: `cd src/crisp_controllers && git pull origin main && cd ../.. && git add src/crisp_controllers && git commit`
 
 ### 2.3 Install dependencies
 ```bash
@@ -568,6 +574,9 @@ source /opt/ros/humble/setup.bash
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 source install/setup.bash
 ```
+
+> **OOM Warning**: `crisp_controllers` compiles heavy pinocchio/Eigen templates.
+> On machines with < 16 GB RAM, limit parallelism: `colcon build -j1 --cmake-args ...`
 
 ### 4.2 Verify CRISP plugin is discoverable
 ```bash
