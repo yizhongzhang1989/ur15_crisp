@@ -28,12 +28,44 @@ rosdep install --from-paths src --ignore-src -r -y
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 source install/setup.bash
 
-# 5. Launch with mock hardware (verify build works)
+# 5. Install crisp_py (Python interface)
+pip3 install src/crisp_py
+
+# 6. Launch with mock hardware (verify build works)
 ros2 launch crisp_ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true
 
-# 6. Launch with real UR15 (start External Control on teach pendant first)
+# 7. Launch with real UR15 (see "Launching on Real Hardware" below)
 ros2 launch crisp_ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
 ```
+
+## Launching on Real Hardware
+
+If the robot is in **remote control mode** (no access to teach pendant), use the following sequence:
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+# 1. Launch dashboard client (for remote power/brake/program control)
+ros2 launch ur_robot_driver ur_dashboard_client.launch.py robot_ip:=192.168.1.15 &
+sleep 3
+
+# 2. Power on and release brakes
+ros2 service call /dashboard_client/power_on std_srvs/srv/Trigger
+sleep 10
+ros2 service call /dashboard_client/brake_release std_srvs/srv/Trigger
+sleep 10
+
+# 3. Kill the standalone dashboard client (the launch file includes its own)
+kill %1
+
+# 4. Launch CRISP controllers
+ros2 launch crisp_ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
+```
+
+If the teach pendant is accessible, simply start the **External Control** program on the pendant, then run step 4.
+
+> **Note**: Do not run a separate `ur_dashboard_client.launch.py` at the same time as `ur15_crisp.launch.py` — the launch file already includes a dashboard client. Having two will cause an RTDE conflict (`speed_slider_mask is currently controlled by another RTDE client`).
 
 ## Activating CRISP Controllers
 
@@ -52,6 +84,28 @@ ros2 control switch_controllers --activate joint_impedance_controller --deactiva
 # Return to trajectory control
 ros2 control switch_controllers --activate scaled_joint_trajectory_controller --deactivate <active_crisp_controller>
 ```
+
+## Commanding the Robot
+
+With `cartesian_impedance_controller` active, send target poses via the `/target_pose` topic. Read the current pose from `/current_pose`.
+
+> **Important**: Both topics use the `base_link` frame. The UR driver's `/tcp_pose_broadcaster/pose` uses the `base` frame (180° rotated around Z) — do not mix them.
+
+```bash
+# Read current EE pose
+ros2 topic echo /current_pose --once
+
+# Send a target pose (continuous publish — needed for DDS discovery)
+ros2 topic pub /target_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'base_link'}, pose: {position: {x: 0.0, y: 0.92, z: 0.69}, orientation: {x: -0.168, y: -0.257, z: -0.755, w: 0.579}}}"
+# Press Ctrl+C once the robot reaches the target
+
+# Single-shot publish (use -w 1 to wait for subscriber discovery)
+ros2 topic pub -w 1 --once /target_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'base_link'}, pose: {position: {x: 0.0, y: 0.92, z: 0.69}, orientation: {x: -0.168, y: -0.257, z: -0.755, w: 0.579}}}"
+```
+
+> **Tip**: `--once` without `-w 1` may fail silently due to DDS discovery delay — the message is sent before the controller's subscriber discovers the new publisher.
 
 ## Live Parameter Tuning
 
@@ -125,17 +179,54 @@ The current `ur15_controllers.yaml` has been tested on real UR15 hardware with t
 | `cartesian_impedance_controller` | k_pos=600, d_pos=200, k_rot=30, d_rot=30 | Holds EE pose, compliant to perturbation |
 | `joint_impedance_controller` | k_eff=50/10 (shoulder/wrist), d_eff=40/8 | Holds joint config, smooth return |
 
+## Using `crisp_py` (Python Interface)
+
+[crisp_py](https://github.com/utiasDSL/crisp_py) provides a high-level Python API for controlling the robot. It is included as a submodule at `src/crisp_py`.
+
+```python
+from crisp_py.robot import make_robot
+from crisp_py.utils.geometry import Pose
+import numpy as np
+
+robot = make_robot("ur")
+robot.wait_until_ready()
+
+# Read state
+print(robot.end_effector_pose)
+print(robot.joint_values)
+
+# Switch to Cartesian impedance control
+robot.controller_switcher_client.switch_controller("cartesian_impedance_controller")
+
+# Send a target pose
+target = robot.end_effector_pose.copy()
+target.position[2] += 0.05  # move up 5 cm
+robot.set_target(pose=target)
+
+# Home the robot (uses joint_trajectory_controller)
+robot.home()
+
+robot.shutdown()
+```
+
+See [scripts/test_crisp_py.py](scripts/test_crisp_py.py) for a complete figure-eight example.
+
+> **Note**: `crisp_py` requires `>=3.11` in its pyproject.toml, but works on Python 3.10 (ROS Humble). The submodule has this constraint relaxed to `>=3.10`.
+
 ## Structure
 
 ```
 ur15_crisp/
 ├── src/
 │   ├── crisp_controllers/        # [submodule] utiasDSL/crisp_controllers v2.1.0
+│   ├── crisp_py/                 # [submodule] utiasDSL/crisp_py v3.4.0
 │   └── crisp_ur15_bringup/       # UR15-specific bringup (config + launch)
 │       ├── config/
 │       │   └── ur15_controllers.yaml
 │       └── launch/
 │           └── ur15_crisp.launch.py
+├── scripts/
+│   └── test_crisp_py.py          # crisp_py figure-eight test
 └── README.md
 ```
 
@@ -152,7 +243,16 @@ ur15_crisp/
 | Check FT sensor | `ros2 topic echo /ft_data --once` |
 | Record rosbag | `ros2 bag record /joint_states /ft_data /current_pose /target_pose -o test_bag` |
 
+## Quick Reference
+
+| Action | Command |
+|---|---|
+| Power on (remote) | `ros2 service call /dashboard_client/power_on std_srvs/srv/Trigger` |
+| Brake release | `ros2 service call /dashboard_client/brake_release std_srvs/srv/Trigger` |
+| Check robot mode | `ros2 service call /dashboard_client/get_robot_mode ur_dashboard_msgs/srv/GetRobotMode` |
+
 ## References
 
 - [CRISP Controllers](https://github.com/utiasDSL/crisp_controllers) — controller source & docs
+- [crisp_py](https://github.com/utiasDSL/crisp_py) — Python interface for CRISP
 - [pixi_ur_ros2](https://github.com/lvjonok/pixi_ur_ros2) — community UR + CRISP integration reference
