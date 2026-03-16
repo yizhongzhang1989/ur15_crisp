@@ -85,6 +85,28 @@ ros2 control switch_controllers --activate joint_impedance_controller --deactiva
 ros2 control switch_controllers --activate scaled_joint_trajectory_controller --deactivate <active_crisp_controller>
 ```
 
+## Commanding the Robot
+
+With `cartesian_impedance_controller` active, send target poses via the `/target_pose` topic. Read the current pose from `/current_pose`.
+
+> **Important**: Both topics use the `base_link` frame. The UR driver's `/tcp_pose_broadcaster/pose` uses the `base` frame (180° rotated around Z) — do not mix them.
+
+```bash
+# Read current EE pose
+ros2 topic echo /current_pose --once
+
+# Send a target pose (continuous publish — needed for DDS discovery)
+ros2 topic pub /target_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'base_link'}, pose: {position: {x: 0.0, y: 0.92, z: 0.69}, orientation: {x: -0.168, y: -0.257, z: -0.755, w: 0.579}}}"
+# Press Ctrl+C once the robot reaches the target
+
+# Single-shot publish (use -w 1 to wait for subscriber discovery)
+ros2 topic pub -w 1 --once /target_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'base_link'}, pose: {position: {x: 0.0, y: 0.92, z: 0.69}, orientation: {x: -0.168, y: -0.257, z: -0.755, w: 0.579}}}"
+```
+
+> **Tip**: `--once` without `-w 1` may fail silently due to DDS discovery delay — the message is sent before the controller's subscriber discovers the new publisher.
+
 ## Live Parameter Tuning
 
 CRISP uses `generate_parameter_library` — parameters can be adjusted at runtime without restarting:
