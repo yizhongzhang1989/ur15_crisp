@@ -35,6 +35,7 @@ class WebControlServer:
         self._ft_force = np.zeros(3)
         self._ft_torque = np.zeros(3)
         self._commanded_torques = None
+        self._target_joints = None
         self._param_clients = {}  # cache: controller_name -> ParametersClient
 
         # Subscribe to /joint_states for velocity and effort
@@ -60,6 +61,15 @@ class WebControlServer:
             JointState,
             "commanded_torques",
             self._commanded_torques_cb,
+            10,
+            callback_group=ReentrantCallbackGroup(),
+        )
+
+        # Subscribe to /target_joint for target joint positions
+        self.robot.node.create_subscription(
+            JointState,
+            "target_joint",
+            self._target_joint_cb,
             10,
             callback_group=ReentrantCallbackGroup(),
         )
@@ -96,6 +106,15 @@ class WebControlServer:
             if jname in names:
                 torques[names.index(jname)] = eff
         self._commanded_torques = torques
+
+    def _target_joint_cb(self, msg: JointState):
+        """Cache target joint positions."""
+        names = self.robot.config.joint_names
+        targets = np.zeros(len(names))
+        for jname, pos in zip(msg.name, msg.position):
+            if jname in names:
+                targets[names.index(jname)] = pos
+        self._target_joints = targets
 
     def _wait_for_robot(self):
         try:
@@ -347,6 +366,7 @@ class WebControlServer:
                                 "force_mag": round(float(np.linalg.norm(self._ft_force)), 2),
                             },
                             "cmd_torques": [round(float(v), 3) for v in self._commanded_torques] if self._commanded_torques is not None else [],
+                            "target_joints": [round(float(v), 4) for v in self._target_joints] if self._target_joints is not None else [],
                         }
                         yield f"data: {json.dumps(data)}\n\n"
                     except Exception:
