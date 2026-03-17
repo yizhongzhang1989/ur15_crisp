@@ -121,7 +121,7 @@
       <span class="jname">Joint</span>
       <span class="jval">Position</span>
       <span class="jvel">Velocity</span>
-      <span class="jeff">Effort</span>
+      <span class="jeff">Current</span>
       <span class="jcmd">Cmd Torque</span>
     </div>
     <div class="joint-list" id="jointDisplay">—</div>
@@ -246,7 +246,7 @@ function startStream() {
       `<div><span class="jname">${JOINT_NAMES[i]}</span>` +
       `<span class="jval">${(v * 180 / Math.PI).toFixed(1)}&deg;</span>` +
       `<span class="jvel">${vel[i] !== undefined ? vel[i].toFixed(3) : '\u2014'} rad/s</span>` +
-      `<span class="jeff">${eff[i] !== undefined ? eff[i].toFixed(1) : '\u2014'} Nm</span>` +
+      `<span class="jeff">${eff[i] !== undefined ? eff[i].toFixed(2) : '\u2014'} A</span>` +
       `<span class="jcmd">${cmd[i] !== undefined ? cmd[i].toFixed(2) : '\u2014'} Nm</span></div>`
     ).join("");
 
