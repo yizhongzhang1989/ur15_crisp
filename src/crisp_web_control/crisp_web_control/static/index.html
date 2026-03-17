@@ -11,8 +11,11 @@
   .monitor-bar { position: sticky; top: 0; z-index: 100; background: var(--bar-bg); border-bottom: 2px solid var(--accent); padding: 6px 12px; }
   .monitor-bar .bar-title { text-align: center; font-size: 1.1em; font-weight: bold; padding: 4px 0 6px; }
   .monitor-bar .bar-title span { color: var(--highlight); }
-  .monitor-sections { display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; }
-  .monitor-section { background: var(--card); border-radius: 6px; padding: 8px 12px; flex-shrink: 0; }
+  .monitor-sections { display: flex; gap: 12px; align-items: flex-start; }
+  .monitor-section { background: var(--card); border-radius: 6px; padding: 8px 12px; flex-shrink: 0; flex-grow: 0; }
+  .monitor-section.sec-pose { width: 280px; }
+  .monitor-section.sec-joints { flex: 1; min-width: 0; }
+  .monitor-section.sec-ft { width: 260px; }
   .monitor-section h3 { font-size: 0.85em; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
   .status-dot.ok { background: var(--green); } .status-dot.err { background: var(--highlight); } .status-dot.wait { background: var(--orange); }
@@ -66,21 +69,21 @@
 <div class="monitor-bar">
   <div class="bar-title"><span>CRISP</span> Web Control — UR15 &nbsp;<span class="status-dot wait" id="connDot"></span><span id="connText" style="font-size:0.7em;color:var(--dim)">Connecting...</span></div>
   <div class="monitor-sections">
-    <div class="monitor-section">
+    <div class="monitor-section sec-pose">
       <h3>End-Effector (base_link)</h3>
       <div class="pose-compact">
         <span class="label">Pos:</span> (<span id="px">—</span>, <span id="py">—</span>, <span id="pz">—</span>) m<br>
         <span class="label">Ori:</span> (<span id="qx">—</span>, <span id="qy">—</span>, <span id="qz">—</span>, <span id="qw">—</span>)
       </div>
     </div>
-    <div class="monitor-section" style="flex-grow:1;">
+    <div class="monitor-section sec-joints">
       <h3>Joint States</h3>
       <table class="joint-table">
         <thead><tr><th>Joint</th><th>Position</th><th>Velocity</th><th>Current</th><th>Cmd Torque</th></tr></thead>
         <tbody id="jointDisplay"><tr><td colspan="5">—</td></tr></tbody>
       </table>
     </div>
-    <div class="monitor-section">
+    <div class="monitor-section sec-ft">
       <h3>TCP Force/Torque</h3>
       <div class="ft-compact">
         <span class="mag">|F| = <span id="ftMag">0.00</span> N</span><br>
