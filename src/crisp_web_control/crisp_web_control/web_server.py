@@ -34,6 +34,7 @@ class WebControlServer:
         self._joint_names_ordered = None
         self._ft_force = np.zeros(3)
         self._ft_torque = np.zeros(3)
+        self._commanded_torques = None
         self._param_clients = {}  # cache: controller_name -> ParametersClient
 
         # Subscribe to /joint_states for velocity and effort
@@ -51,6 +52,15 @@ class WebControlServer:
             "force_torque_sensor_broadcaster/wrench",
             self._ft_cb,
             qos_profile_sensor_data,
+            callback_group=ReentrantCallbackGroup(),
+        )
+
+        # Subscribe to commanded torques from CRISP controllers
+        self.robot.node.create_subscription(
+            JointState,
+            "commanded_torques",
+            self._commanded_torques_cb,
+            10,
             callback_group=ReentrantCallbackGroup(),
         )
 
@@ -77,6 +87,15 @@ class WebControlServer:
         """Cache TCP force/torque from /ft_data."""
         self._ft_force = np.array([msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z])
         self._ft_torque = np.array([msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z])
+
+    def _commanded_torques_cb(self, msg: JointState):
+        """Cache commanded torques from CRISP controller."""
+        names = self.robot.config.joint_names
+        torques = np.zeros(len(names))
+        for jname, eff in zip(msg.name, msg.effort):
+            if jname in names:
+                torques[names.index(jname)] = eff
+        self._commanded_torques = torques
 
     def _wait_for_robot(self):
         try:
@@ -298,6 +317,7 @@ class WebControlServer:
                                 "torque": {"x": round(float(self._ft_torque[0]), 3), "y": round(float(self._ft_torque[1]), 3), "z": round(float(self._ft_torque[2]), 3)},
                                 "force_mag": round(float(np.linalg.norm(self._ft_force)), 2),
                             },
+                            "cmd_torques": [round(float(v), 3) for v in self._commanded_torques] if self._commanded_torques is not None else [],
                         }
                         yield f"data: {json.dumps(data)}\n\n"
                     except Exception:

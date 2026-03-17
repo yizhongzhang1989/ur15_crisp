@@ -29,12 +29,14 @@
   .joint-list .jval { display: inline-block; width: 100px; }
   .joint-list .jvel { display: inline-block; width: 100px; color: var(--blue); }
   .joint-list .jeff { display: inline-block; width: 90px; color: var(--orange); }
+  .joint-list .jcmd { display: inline-block; width: 90px; color: var(--highlight); }
   .joint-header { font-size: 0.8em; color: var(--dim); margin-bottom: 4px; }
   .joint-header span { display: inline-block; }
   .joint-header .jname { width: 130px; }
   .joint-header .jval { width: 100px; }
   .joint-header .jvel { width: 100px; }
   .joint-header .jeff { width: 90px; }
+  .joint-header .jcmd { width: 90px; }
 
   /* FT Sensor */
   .ft-grid { display: grid; grid-template-columns: auto 1fr 1fr 1fr auto; gap: 4px 12px; font-family: monospace; font-size: 0.95em; align-items: center; }
@@ -120,6 +122,7 @@
       <span class="jval">Position</span>
       <span class="jvel">Velocity</span>
       <span class="jeff">Effort</span>
+      <span class="jcmd">Cmd Torque</span>
     </div>
     <div class="joint-list" id="jointDisplay">—</div>
   </div>
@@ -238,11 +241,13 @@ function startStream() {
     const jDiv = document.getElementById("jointDisplay");
     const vel = d.velocity || [];
     const eff = d.effort || [];
+    const cmd = d.cmd_torques || [];
     jDiv.innerHTML = d.joints.map((v, i) =>
       `<div><span class="jname">${JOINT_NAMES[i]}</span>` +
       `<span class="jval">${(v * 180 / Math.PI).toFixed(1)}&deg;</span>` +
-      `<span class="jvel">${vel[i] !== undefined ? vel[i].toFixed(3) : '—'} rad/s</span>` +
-      `<span class="jeff">${eff[i] !== undefined ? eff[i].toFixed(1) : '—'} Nm</span></div>`
+      `<span class="jvel">${vel[i] !== undefined ? vel[i].toFixed(3) : '\u2014'} rad/s</span>` +
+      `<span class="jeff">${eff[i] !== undefined ? eff[i].toFixed(1) : '\u2014'} Nm</span>` +
+      `<span class="jcmd">${cmd[i] !== undefined ? cmd[i].toFixed(2) : '\u2014'} Nm</span></div>`
     ).join("");
 
     // FT sensor
