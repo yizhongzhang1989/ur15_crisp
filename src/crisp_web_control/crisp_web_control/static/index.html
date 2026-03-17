@@ -169,25 +169,42 @@ function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',
 function setParam(c,n,id,ib){const el=document.getElementById(id);let v=ib?el.value==='true':parseFloat(el.value);if(!ib&&isNaN(v)){document.getElementById("paramLog").innerHTML='<div class="err">Invalid number</div>';return;}const l=document.getElementById("paramLog");l.innerHTML=`<div>Setting ${n} = ${v}...</div>`;fetch(`/api/params/${c}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({params:{[n]:v}})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Set ${n} = ${v}</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 
 // === Real-time Plot ===
-const PLOT_MAX_SAMPLES = 600; // 60s at 10Hz
+const PLOT_MAX_SAMPLES = 6000; // 60s at ~100Hz
 let plotData = { time: [], position: Array.from({length:6},()=>[]), targetPos: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
 let plotFrozen = false;
 let plotFrozenTMin = 0, plotFrozenTMax = 10;
-let plotStartTime = Date.now();
+let plotBaseTime = 0; // first ROS timestamp for relative time
 
 function pushPlotData(d) {
   if (plotFrozen) return;
-  const t = (Date.now() - plotStartTime) / 1000;
-  plotData.time.push(t);
-  const tgt = d.target_joints || [];
-  for (let i = 0; i < 6; i++) {
-    plotData.position[i].push(d.joints[i] !== undefined ? d.joints[i] * 180 / Math.PI : NaN);
-    plotData.targetPos[i].push(tgt[i] !== undefined ? tgt[i] * 180 / Math.PI : NaN);
-    plotData.current[i].push(d.effort && d.effort[i] !== undefined ? d.effort[i] : NaN);
-    plotData.cmdTorque[i].push(d.cmd_torques && d.cmd_torques[i] !== undefined ? d.cmd_torques[i] : NaN);
+  // Use high-rate batch data if available
+  const batch = d.plot_batch;
+  if (batch && batch.length > 0) {
+    for (const s of batch) {
+      if (plotBaseTime === 0) plotBaseTime = s.t;
+      const t = s.t - plotBaseTime;
+      plotData.time.push(t);
+      for (let i = 0; i < 6; i++) {
+        plotData.position[i].push(s.pos[i] !== undefined ? s.pos[i] * 180 / Math.PI : NaN);
+        plotData.targetPos[i].push(s.tgt && s.tgt[i] !== undefined ? s.tgt[i] * 180 / Math.PI : NaN);
+        plotData.current[i].push(s.eff && s.eff[i] !== undefined ? s.eff[i] : NaN);
+        plotData.cmdTorque[i].push(s.cmd && s.cmd[i] !== undefined ? s.cmd[i] : NaN);
+      }
+    }
+  } else {
+    // Fallback: use single sample from SSE data
+    const t = plotData.time.length > 0 ? plotData.time[plotData.time.length - 1] + 0.1 : 0;
+    plotData.time.push(t);
+    const tgt = d.target_joints || [];
+    for (let i = 0; i < 6; i++) {
+      plotData.position[i].push(d.joints[i] !== undefined ? d.joints[i] * 180 / Math.PI : NaN);
+      plotData.targetPos[i].push(tgt[i] !== undefined ? tgt[i] * 180 / Math.PI : NaN);
+      plotData.current[i].push(d.effort && d.effort[i] !== undefined ? d.effort[i] : NaN);
+      plotData.cmdTorque[i].push(d.cmd_torques && d.cmd_torques[i] !== undefined ? d.cmd_torques[i] : NaN);
+    }
   }
   // Trim to max samples
-  if (plotData.time.length > PLOT_MAX_SAMPLES) {
+  while (plotData.time.length > PLOT_MAX_SAMPLES) {
     plotData.time.shift();
     for (let i = 0; i < 6; i++) { plotData.position[i].shift(); plotData.targetPos[i].shift(); plotData.current[i].shift(); plotData.cmdTorque[i].shift(); }
   }
@@ -207,7 +224,7 @@ function toggleFreeze() {
 
 function clearPlot() {
   plotData = { time: [], position: Array.from({length:6},()=>[]), targetPos: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
-  plotStartTime = Date.now();
+  plotBaseTime = 0;
 }
 
 function drawPlot() {

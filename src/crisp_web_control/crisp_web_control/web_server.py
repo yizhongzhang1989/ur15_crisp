@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import time
+from collections import deque
 
 import numpy as np
 import rclpy
@@ -36,6 +37,9 @@ class WebControlServer:
         self._ft_torque = np.zeros(3)
         self._commanded_torques = None
         self._target_joints = None
+        self._plot_buffer = deque(maxlen=5000)  # high-rate plot samples
+        self._plot_lock = threading.Lock()
+        self._plot_downsample = 0  # counter for downsampling 500Hz to ~100Hz
         self._param_clients = {}  # cache: controller_name -> ParametersClient
 
         # Subscribe to /joint_states for velocity and effort
@@ -85,13 +89,30 @@ class WebControlServer:
         names = self.robot.config.joint_names
         vel = np.zeros(len(names))
         eff = np.zeros(len(names))
-        for jname, v, e in zip(msg.name, msg.velocity, msg.effort):
+        pos = np.zeros(len(names))
+        for jname, v, e, p in zip(msg.name, msg.velocity, msg.effort, msg.position):
             if jname in names:
                 idx = names.index(jname)
                 vel[idx] = v
                 eff[idx] = e
+                pos[idx] = p
         self._joint_velocity = vel
         self._joint_effort = eff
+
+        # Accumulate plot samples at ~100 Hz (every 5th callback from 500 Hz)
+        self._plot_downsample += 1
+        if self._plot_downsample >= 5:
+            self._plot_downsample = 0
+            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            sample = {
+                "t": round(stamp, 4),
+                "pos": [round(float(v), 5) for v in pos],
+                "eff": [round(float(v), 3) for v in eff],
+                "cmd": [round(float(v), 4) for v in self._commanded_torques] if self._commanded_torques is not None else [],
+                "tgt": [round(float(v), 5) for v in self._target_joints] if self._target_joints is not None else [],
+            }
+            with self._plot_lock:
+                self._plot_buffer.append(sample)
 
     def _ft_cb(self, msg: WrenchStamped):
         """Cache TCP force/torque from /ft_data."""
@@ -368,6 +389,11 @@ class WebControlServer:
                             "cmd_torques": [round(float(v), 3) for v in self._commanded_torques] if self._commanded_torques is not None else [],
                             "target_joints": [round(float(v), 4) for v in self._target_joints] if self._target_joints is not None else [],
                         }
+                        # Drain plot buffer and attach batch
+                        with self._plot_lock:
+                            if self._plot_buffer:
+                                data["plot_batch"] = list(self._plot_buffer)
+                                self._plot_buffer.clear()
                         yield f"data: {json.dumps(data)}\n\n"
                     except Exception:
                         yield f"data: {json.dumps({'ready': False})}\n\n"
