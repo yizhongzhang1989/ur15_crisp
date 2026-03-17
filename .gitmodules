@@ -1,7 +1,8 @@
-[submodule "src/crisp_controllers"]
-	path = src/crisp_controllers
-	url = https://github.com/utiasDSL/crisp_controllers.git
-	shallow = true
 [submodule "src/crisp_py"]
 	path = src/crisp_py
-	url = https://github.com/utiasDSL/crisp_py.git
+	url = https://github.com/yizhongzhang1989/crisp_py.git
+	shallow = true
+[submodule "src/crisp_controllers"]
+	path = src/crisp_controllers
+	url = https://github.com/yizhongzhang1989/crisp_controllers.git
+	shallow = true
