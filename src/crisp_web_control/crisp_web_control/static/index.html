@@ -5,564 +5,142 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CRISP Web Control — UR15</title>
 <style>
-  :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --highlight: #e94560; --text: #eee; --dim: #888; --green: #4caf50; --orange: #ff9800; --blue: #2196f3; }
+  :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --highlight: #e94560; --text: #eee; --dim: #888; --green: #4caf50; --orange: #ff9800; --blue: #2196f3; --bar-bg: #0d1525; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-  h1 { text-align: center; padding: 18px; font-size: 1.4em; background: var(--card); border-bottom: 2px solid var(--accent); }
-  h1 span { color: var(--highlight); }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; max-width: 1100px; margin: 0 auto; }
+  .monitor-bar { position: sticky; top: 0; z-index: 100; background: var(--bar-bg); border-bottom: 2px solid var(--accent); padding: 6px 12px; }
+  .monitor-bar .bar-title { text-align: center; font-size: 1.1em; font-weight: bold; padding: 4px 0 6px; }
+  .monitor-bar .bar-title span { color: var(--highlight); }
+  .monitor-sections { display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; }
+  .monitor-section { background: var(--card); border-radius: 6px; padding: 8px 12px; flex-shrink: 0; }
+  .monitor-section h3 { font-size: 0.85em; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+  .status-dot.ok { background: var(--green); } .status-dot.err { background: var(--highlight); } .status-dot.wait { background: var(--orange); }
+  .pose-compact { font-family: monospace; font-size: 1.0em; line-height: 1.6; }
+  .pose-compact .label { color: var(--dim); }
+  .joint-table { font-family: monospace; font-size: 0.95em; border-collapse: collapse; width: 100%; }
+  .joint-table th { color: var(--dim); font-weight: normal; text-align: left; padding: 2px 8px; font-size: 0.9em; }
+  .joint-table td { padding: 2px 8px; white-space: nowrap; }
+  .joint-table .jvel { color: var(--blue); } .joint-table .jeff { color: var(--orange); } .joint-table .jcmd { color: var(--highlight); }
+  .ft-compact { font-family: monospace; font-size: 1.0em; line-height: 1.6; }
+  .ft-compact .label { color: var(--dim); }
+  .ft-compact .mag { color: var(--orange); font-weight: bold; font-size: 1.1em; }
+  .content { padding: 12px; max-width: 1100px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .card { background: var(--card); border-radius: 8px; padding: 16px; }
   .card h2 { font-size: 1em; color: var(--dim); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
-  .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
-  .status-dot.ok { background: var(--green); }
-  .status-dot.err { background: var(--highlight); }
-  .status-dot.wait { background: var(--orange); }
-
-  /* Pose display */
-  .pose-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-family: monospace; font-size: 0.95em; }
-  .pose-grid .label { color: var(--dim); text-align: right; }
-  .pose-grid .val { color: var(--text); }
-
-  /* Joints */
-  .joint-list { font-family: monospace; font-size: 0.9em; line-height: 1.8; }
-  .joint-list .jname { color: var(--dim); display: inline-block; width: 130px; }
-  .joint-list .jval { display: inline-block; width: 100px; }
-  .joint-list .jvel { display: inline-block; width: 100px; color: var(--blue); }
-  .joint-list .jeff { display: inline-block; width: 90px; color: var(--orange); }
-  .joint-list .jcmd { display: inline-block; width: 90px; color: var(--highlight); }
-  .joint-header { font-size: 0.8em; color: var(--dim); margin-bottom: 4px; }
-  .joint-header span { display: inline-block; }
-  .joint-header .jname { width: 130px; }
-  .joint-header .jval { width: 100px; }
-  .joint-header .jvel { width: 100px; }
-  .joint-header .jeff { width: 90px; }
-  .joint-header .jcmd { width: 90px; }
-
-  /* FT Sensor */
-  .ft-grid { display: grid; grid-template-columns: auto 1fr 1fr 1fr auto; gap: 4px 12px; font-family: monospace; font-size: 0.95em; align-items: center; }
-  .ft-grid .label { color: var(--dim); text-align: right; }
-  .ft-grid .val { color: var(--text); }
-  .ft-mag { font-size: 1.3em; font-weight: bold; text-align: center; margin: 8px 0; color: var(--orange); }
-
-  /* Parameters */
-  .param-group { margin-bottom: 8px; }
-  .param-group-title { font-size: 0.85em; color: var(--highlight); margin: 8px 0 4px; font-weight: bold; text-transform: uppercase; }
+  .ctrl-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+  .ctrl-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: 4px; background: rgba(255,255,255,0.03); }
+  .ctrl-item .name { font-family: monospace; font-size: 0.9em; } .ctrl-item .badge { font-size: 0.75em; padding: 2px 8px; border-radius: 10px; }
+  .badge.active { background: var(--green); color: #000; } .badge.inactive { background: var(--accent); color: var(--dim); }
+  .ctrl-item button { font-size: 0.8em; padding: 4px 12px; border: 1px solid var(--accent); background: transparent; color: var(--text); border-radius: 4px; cursor: pointer; }
+  .ctrl-item button:hover { background: var(--accent); }
+  .move-section { display: flex; flex-direction: column; gap: 12px; }
+  .delta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .delta-grid button { padding: 10px; font-size: 1em; font-weight: bold; border: none; border-radius: 6px; cursor: pointer; color: #fff; }
+  .delta-grid button:active { filter: brightness(0.8); }
+  .btn-x { background: var(--highlight); } .btn-y { background: var(--green); } .btn-z { background: var(--blue); }
+  .step-row { display: flex; align-items: center; gap: 8px; }
+  .step-row label { color: var(--dim); font-size: 0.9em; }
+  .step-row input, .step-row select { width: 80px; padding: 4px 8px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 4px; font-family: monospace; }
+  .target-form { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; font-size: 0.9em; }
+  .target-form label { color: var(--dim); text-align: right; padding-top: 4px; }
+  .target-form input { padding: 4px 8px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 4px; font-family: monospace; }
+  .btn-row { display: flex; gap: 8px; margin-top: 6px; }
+  .btn-send { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; color: #fff; background: var(--blue); }
+  .btn-copy { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; color: #fff; background: var(--accent); }
+  .btn-send:hover, .btn-copy:hover { filter: brightness(1.2); }
+  .param-group { margin-bottom: 8px; } .param-group-title { font-size: 0.85em; color: var(--highlight); margin: 8px 0 4px; font-weight: bold; text-transform: uppercase; }
   .param-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-family: monospace; font-size: 0.85em; }
   .param-row .pname { color: var(--dim); min-width: 220px; text-align: right; }
   .param-row input { width: 120px; padding: 3px 6px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 3px; font-family: monospace; font-size: 0.85em; }
   .param-row input:focus { border-color: var(--blue); outline: none; }
   .param-row .pbtn { padding: 2px 10px; font-size: 0.8em; border: 1px solid var(--accent); background: transparent; color: var(--text); border-radius: 3px; cursor: pointer; }
-  .param-row .pbtn:hover { background: var(--blue); }
-  .param-row .ptype { color: var(--dim); font-size: 0.75em; min-width: 40px; }
-
-  /* Controllers */
-  .ctrl-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
-  .ctrl-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: 4px; background: rgba(255,255,255,0.03); }
-  .ctrl-item .name { font-family: monospace; font-size: 0.9em; }
-  .ctrl-item .badge { font-size: 0.75em; padding: 2px 8px; border-radius: 10px; }
-  .badge.active { background: var(--green); color: #000; }
-  .badge.inactive { background: var(--accent); color: var(--dim); }
-  .ctrl-item button { font-size: 0.8em; padding: 4px 12px; border: 1px solid var(--accent); background: transparent; color: var(--text); border-radius: 4px; cursor: pointer; }
-  .ctrl-item button:hover { background: var(--accent); }
-  .ctrl-item button:disabled { opacity: 0.3; cursor: default; }
-
-  /* Movement controls */
-  .move-section { display: flex; flex-direction: column; gap: 12px; }
-  .delta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-  .delta-grid button { padding: 10px; font-size: 1em; font-weight: bold; border: none; border-radius: 6px; cursor: pointer; color: #fff; }
-  .delta-grid button:active { filter: brightness(0.8); }
-  .btn-x { background: var(--highlight); }
-  .btn-y { background: var(--green); }
-  .btn-z { background: var(--blue); }
-  .step-row { display: flex; align-items: center; gap: 8px; }
-  .step-row label { color: var(--dim); font-size: 0.9em; }
-  .step-row input { width: 80px; padding: 4px 8px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 4px; font-family: monospace; }
-
-  /* Target pose form */
-  .target-form { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; font-size: 0.9em; }
-  .target-form label { color: var(--dim); text-align: right; padding-top: 4px; }
-  .target-form input { padding: 4px 8px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 4px; font-family: monospace; }
-  .target-form .btn-row { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 6px; }
-  .target-form button, .action-btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; color: #fff; }
-  .btn-send { background: var(--blue); }
-  .btn-copy { background: var(--accent); }
-  .btn-send:hover, .btn-copy:hover { filter: brightness(1.2); }
-
+  .param-row .pbtn:hover { background: var(--blue); } .param-row .ptype { color: var(--dim); font-size: 0.75em; min-width: 40px; }
   .full-width { grid-column: 1 / -1; }
   .log { font-family: monospace; font-size: 0.8em; color: var(--dim); max-height: 60px; overflow-y: auto; margin-top: 8px; }
-  .log .err { color: var(--highlight); }
-  .log .ok { color: var(--green); }
+  .log .err { color: var(--highlight); } .log .ok { color: var(--green); }
 </style>
 </head>
 <body>
-<h1><span>CRISP</span> Web Control — UR15</h1>
-
-<div class="grid">
-  <!-- Status -->
-  <div class="card">
-    <h2><span class="status-dot wait" id="connDot"></span>Connection</h2>
-    <div id="connText" style="margin-bottom:12px; font-size:0.9em;">Connecting...</div>
-    <h2>End-Effector Pose (base_link)</h2>
-    <div class="pose-grid" id="poseDisplay">
-      <span class="label">X:</span><span class="val" id="px">—</span>
-      <span class="label">Y:</span><span class="val" id="py">—</span>
-      <span class="label">Z:</span><span class="val" id="pz">—</span>
-      <span class="label">qx:</span><span class="val" id="qx">—</span>
-      <span class="label">qy:</span><span class="val" id="qy">—</span>
-      <span class="label">qz:</span><span class="val" id="qz">—</span>
-      <span class="label">qw:</span><span class="val" id="qw">—</span>
-    </div>
-  </div>
-
-  <!-- Joints -->
-  <div class="card">
-    <h2>Joint States</h2>
-    <div class="joint-header" style="font-family:monospace;">
-      <span class="jname">Joint</span>
-      <span class="jval">Position</span>
-      <span class="jvel">Velocity</span>
-      <span class="jeff">Current</span>
-      <span class="jcmd">Cmd Torque</span>
-    </div>
-    <div class="joint-list" id="jointDisplay">—</div>
-  </div>
-
-  <!-- FT Sensor -->
-  <div class="card">
-    <h2>TCP Force / Torque Sensor</h2>
-    <div class="ft-mag">|F| = <span id="ftMag">0.00</span> N</div>
-    <div class="ft-grid">
-      <span class="label">Force:</span>
-      <span class="val">Fx: <span id="fx">0</span> N</span>
-      <span class="val">Fy: <span id="fy">0</span> N</span>
-      <span class="val">Fz: <span id="fz">0</span> N</span>
-      <span></span>
-      <span class="label">Torque:</span>
-      <span class="val">Tx: <span id="ftx">0</span> Nm</span>
-      <span class="val">Ty: <span id="fty">0</span> Nm</span>
-      <span class="val">Tz: <span id="ftz">0</span> Nm</span>
-      <span></span>
-    </div>
-  </div>
-
-  <!-- Controllers -->
-  <div class="card">
-    <h2>Controllers</h2>
-    <div class="ctrl-list" id="ctrlList">Loading...</div>
-    <div class="log" id="ctrlLog"></div>
-  </div>
-
-  <!-- Movement -->
-  <div class="card">
-    <h2>Cartesian Control</h2>
-    <div class="move-section">
-      <div class="step-row">
-        <label>Step (m):</label>
-        <input type="number" id="stepSize" value="0.02" step="0.005" min="0.001" max="0.2">
+<div class="monitor-bar">
+  <div class="bar-title"><span>CRISP</span> Web Control — UR15 &nbsp;<span class="status-dot wait" id="connDot"></span><span id="connText" style="font-size:0.7em;color:var(--dim)">Connecting...</span></div>
+  <div class="monitor-sections">
+    <div class="monitor-section">
+      <h3>End-Effector (base_link)</h3>
+      <div class="pose-compact">
+        <span class="label">Pos:</span> (<span id="px">—</span>, <span id="py">—</span>, <span id="pz">—</span>) m<br>
+        <span class="label">Ori:</span> (<span id="qx">—</span>, <span id="qy">—</span>, <span id="qz">—</span>, <span id="qw">—</span>)
       </div>
-      <div class="delta-grid">
-        <button class="btn-x" onclick="moveDelta(1,0,0)">+X</button>
-        <button class="btn-y" onclick="moveDelta(0,1,0)">+Y</button>
-        <button class="btn-z" onclick="moveDelta(0,0,1)">+Z</button>
-        <button class="btn-x" onclick="moveDelta(-1,0,0)">−X</button>
-        <button class="btn-y" onclick="moveDelta(0,-1,0)">−Y</button>
-        <button class="btn-z" onclick="moveDelta(0,0,-1)">−Z</button>
-      </div>
-      <hr style="border-color: var(--accent); margin: 4px 0;">
-      <h2>Send Target Pose</h2>
-      <div class="target-form">
-        <label>X:</label><input type="number" id="tx" step="0.01">
-        <label>Y:</label><input type="number" id="ty" step="0.01">
-        <label>Z:</label><input type="number" id="tz" step="0.01">
-        <label>qx:</label><input type="number" id="tqx" step="0.01">
-        <label>qy:</label><input type="number" id="tqy" step="0.01">
-        <label>qz:</label><input type="number" id="tqz" step="0.01">
-        <label>qw:</label><input type="number" id="tqw" step="0.01">
-        <div class="btn-row">
-          <button class="btn-copy" onclick="copyCurrentPose()">Copy Current</button>
-          <button class="btn-send" onclick="sendTarget()">Send Target</button>
-        </div>
-      </div>
-      <div class="log" id="moveLog"></div>
     </div>
-  </div>
-
-  <!-- Joint Control -->
-  <div class="card">
-    <h2>Joint Control</h2>
-    <div class="move-section">
-      <div class="step-row">
-        <label>Step (deg):</label>
-        <input type="number" id="jointStepSize" value="5" step="1" min="0.5" max="30">
-      </div>
-      <div id="jointControlGrid" style="display:flex; flex-direction:column; gap:6px; font-family:monospace; font-size:0.9em;"></div>
-      <hr style="border-color: var(--accent); margin: 8px 0;">
-      <h2>Send Target Joints</h2>
-      <div id="jointTargetForm" style="display:grid; grid-template-columns:auto 1fr auto auto; gap:4px 8px; align-items:center; font-size:0.9em;"></div>
-      <div class="btn-row" style="margin-top:8px;">
-        <button class="btn-copy" onclick="copyCurrentJoints()">Copy Current</button>
-        <button class="btn-send" onclick="sendTargetJoints()">Send Target</button>
-      </div>
-      <div class="log" id="jointLog"></div>
+    <div class="monitor-section" style="flex-grow:1;">
+      <h3>Joint States</h3>
+      <table class="joint-table">
+        <thead><tr><th>Joint</th><th>Position</th><th>Velocity</th><th>Current</th><th>Cmd Torque</th></tr></thead>
+        <tbody id="jointDisplay"><tr><td colspan="5">—</td></tr></tbody>
+      </table>
     </div>
-  </div>
-
-  <!-- Controller Parameters -->
-  <div class="card full-width">
-    <h2>Controller Parameters</h2>
-    <div class="step-row" style="margin-bottom:10px;">
-      <label>Controller:</label>
-      <select id="paramCtrlSelect" onchange="loadParams()" style="padding:4px 8px; background:var(--bg); border:1px solid var(--accent); color:var(--text); border-radius:4px; font-family:monospace; min-width:250px;">
-        <option value="">-- select --</option>
-        <option value="gravity_compensation">gravity_compensation</option>
-        <option value="cartesian_impedance_controller">cartesian_impedance_controller</option>
-        <option value="joint_impedance_controller">joint_impedance_controller</option>
-      </select>
-      <button class="btn-send" onclick="loadParams()" style="margin-left:4px;">Refresh</button>
+    <div class="monitor-section">
+      <h3>TCP Force/Torque</h3>
+      <div class="ft-compact">
+        <span class="mag">|F| = <span id="ftMag">0.00</span> N</span><br>
+        <span class="label">F:</span> (<span id="fx">0</span>, <span id="fy">0</span>, <span id="fz">0</span>) N<br>
+        <span class="label">T:</span> (<span id="ftx">0</span>, <span id="fty">0</span>, <span id="ftz">0</span>) Nm
+      </div>
     </div>
-    <div id="paramsContainer" style="max-height:400px; overflow-y:auto;"></div>
-    <div class="log" id="paramLog"></div>
   </div>
 </div>
-
+<div class="content"><div class="grid">
+  <div class="card"><h2>Controllers</h2><div class="ctrl-list" id="ctrlList">Loading...</div><div class="log" id="ctrlLog"></div></div>
+  <div class="card"><h2>Cartesian Control</h2><div class="move-section">
+    <div class="step-row"><label>Step (m):</label><input type="number" id="stepSize" value="0.02" step="0.005" min="0.001" max="0.2"></div>
+    <div class="delta-grid">
+      <button class="btn-x" onclick="moveDelta(1,0,0)">+X</button><button class="btn-y" onclick="moveDelta(0,1,0)">+Y</button><button class="btn-z" onclick="moveDelta(0,0,1)">+Z</button>
+      <button class="btn-x" onclick="moveDelta(-1,0,0)">&minus;X</button><button class="btn-y" onclick="moveDelta(0,-1,0)">&minus;Y</button><button class="btn-z" onclick="moveDelta(0,0,-1)">&minus;Z</button>
+    </div>
+    <hr style="border-color:var(--accent);margin:4px 0;"><h2>Send Target Pose</h2>
+    <div class="target-form">
+      <label>X:</label><input type="number" id="tx" step="0.01"><label>Y:</label><input type="number" id="ty" step="0.01"><label>Z:</label><input type="number" id="tz" step="0.01">
+      <label>qx:</label><input type="number" id="tqx" step="0.01"><label>qy:</label><input type="number" id="tqy" step="0.01"><label>qz:</label><input type="number" id="tqz" step="0.01"><label>qw:</label><input type="number" id="tqw" step="0.01">
+      <div class="btn-row" style="grid-column:1/-1;"><button class="btn-copy" onclick="copyCurrentPose()">Copy Current</button><button class="btn-send" onclick="sendTarget()">Send Target</button></div>
+    </div><div class="log" id="moveLog"></div>
+  </div></div>
+  <div class="card"><h2>Joint Control</h2><div class="move-section">
+    <div class="step-row"><label>Step (deg):</label><input type="number" id="jointStepSize" value="5" step="1" min="0.5" max="30"></div>
+    <div id="jointControlGrid" style="display:flex;flex-direction:column;gap:6px;font-family:monospace;font-size:0.9em;"></div>
+    <hr style="border-color:var(--accent);margin:8px 0;"><h2>Send Target Joints</h2>
+    <div id="jointTargetForm" style="display:grid;grid-template-columns:auto 1fr auto auto;gap:4px 8px;align-items:center;font-size:0.9em;"></div>
+    <div class="btn-row" style="margin-top:8px;"><button class="btn-copy" onclick="copyCurrentJoints()">Copy Current</button><button class="btn-send" onclick="sendTargetJoints()">Send Target</button></div>
+    <div class="log" id="jointLog"></div>
+  </div></div>
+  <div class="card full-width"><h2>Controller Parameters</h2>
+    <div class="step-row" style="margin-bottom:10px;"><label>Controller:</label>
+      <select id="paramCtrlSelect" onchange="loadParams()" style="padding:4px 8px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;min-width:250px;">
+        <option value="">-- select --</option><option value="gravity_compensation">gravity_compensation</option><option value="cartesian_impedance_controller">cartesian_impedance_controller</option><option value="joint_impedance_controller">joint_impedance_controller</option>
+      </select><button class="btn-send" onclick="loadParams()" style="margin-left:4px;">Refresh</button>
+    </div><div id="paramsContainer" style="max-height:400px;overflow-y:auto;"></div><div class="log" id="paramLog"></div>
+  </div>
+</div></div>
 <script>
-const JOINT_NAMES = [
-  "shoulder_pan", "shoulder_lift", "elbow",
-  "wrist_1", "wrist_2", "wrist_3"
-];
-const JOINT_FULL_NAMES = [
-  "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
-  "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
-];
-let latestPose = null;
-let latestJoints = null;
-
-// --- SSE Stream ---
-function startStream() {
-  const evtSrc = new EventSource("/api/stream");
-  evtSrc.onmessage = (e) => {
-    const d = JSON.parse(e.data);
-    const dot = document.getElementById("connDot");
-    const txt = document.getElementById("connText");
-    if (!d.ready) {
-      dot.className = "status-dot wait";
-      txt.textContent = "Waiting for robot...";
-      return;
-    }
-    dot.className = "status-dot ok";
-    txt.textContent = "Connected";
-    latestPose = d.pose;
-    latestJoints = d.joints;
-
-    // Pose
-    document.getElementById("px").textContent = d.pose.x;
-    document.getElementById("py").textContent = d.pose.y;
-    document.getElementById("pz").textContent = d.pose.z;
-    document.getElementById("qx").textContent = d.pose.qx;
-    document.getElementById("qy").textContent = d.pose.qy;
-    document.getElementById("qz").textContent = d.pose.qz;
-    document.getElementById("qw").textContent = d.pose.qw;
-
-    // Joints
-    const jDiv = document.getElementById("jointDisplay");
-    const vel = d.velocity || [];
-    const eff = d.effort || [];
-    const cmd = d.cmd_torques || [];
-    jDiv.innerHTML = d.joints.map((v, i) =>
-      `<div><span class="jname">${JOINT_NAMES[i]}</span>` +
-      `<span class="jval">${(v * 180 / Math.PI).toFixed(1)}&deg;</span>` +
-      `<span class="jvel">${vel[i] !== undefined ? vel[i].toFixed(3) : '\u2014'} rad/s</span>` +
-      `<span class="jeff">${eff[i] !== undefined ? eff[i].toFixed(2) : '\u2014'} A</span>` +
-      `<span class="jcmd">${cmd[i] !== undefined ? cmd[i].toFixed(2) : '\u2014'} Nm</span></div>`
-    ).join("");
-
-    // FT sensor
-    if (d.ft) {
-      document.getElementById("fx").textContent = d.ft.force.x;
-      document.getElementById("fy").textContent = d.ft.force.y;
-      document.getElementById("fz").textContent = d.ft.force.z;
-      document.getElementById("ftx").textContent = d.ft.torque.x;
-      document.getElementById("fty").textContent = d.ft.torque.y;
-      document.getElementById("ftz").textContent = d.ft.torque.z;
-      document.getElementById("ftMag").textContent = d.ft.force_mag;
-    }
-  };
-  evtSrc.onerror = () => {
-    document.getElementById("connDot").className = "status-dot err";
-    document.getElementById("connText").textContent = "Disconnected";
-  };
-}
-
-// --- Controllers ---
-let ctrlRefreshTimer = null;
-function refreshControllers() {
-  fetch("/api/controllers").then(r => r.json()).then(d => {
-    if (!d.ready) return;
-    const div = document.getElementById("ctrlList");
-    // Sort: active first, then by name; skip broadcasters for switching
-    const ctrls = d.controllers.sort((a, b) => {
-      if (a.state === "active" && b.state !== "active") return -1;
-      if (a.state !== "active" && b.state === "active") return 1;
-      return a.name.localeCompare(b.name);
-    });
-    div.innerHTML = ctrls.map(c => {
-      const isBroadcaster = c.name.includes("broadcaster");
-      const isActive = c.state === "active";
-      const canSwitch = !isBroadcaster && !isActive;
-      return `<div class="ctrl-item">
-        <span class="name">${c.name}</span>
-        <span>
-          <span class="badge ${c.state}">${c.state}</span>
-          ${canSwitch ? `<button onclick="switchCtrl('${c.name}')">Activate</button>` : ''}
-        </span>
-      </div>`;
-    }).join("");
-  }).catch(() => {});
-}
-
-function switchCtrl(name) {
-  const log = document.getElementById("ctrlLog");
-  log.innerHTML = `<div>Switching to ${name}...</div>`;
-  fetch("/api/switch_controller", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({controller: name}),
-  }).then(r => r.json()).then(d => {
-    if (d.success) {
-      log.innerHTML = `<div class="ok">Switched to ${name}</div>`;
-    } else {
-      log.innerHTML = `<div class="err">Error: ${d.error}</div>`;
-    }
-    refreshControllers();
-  }).catch(e => {
-    log.innerHTML = `<div class="err">${e}</div>`;
-  });
-}
-
-// --- Movement ---
-function moveDelta(sx, sy, sz) {
-  const step = parseFloat(document.getElementById("stepSize").value) || 0.02;
-  const log = document.getElementById("moveLog");
-  fetch("/api/move_delta", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({dx: sx * step, dy: sy * step, dz: sz * step}),
-  }).then(r => r.json()).then(d => {
-    if (d.success) {
-      const p = d.new_position;
-      log.innerHTML = `<div class="ok">Target: (${p.x}, ${p.y}, ${p.z})</div>`;
-    } else {
-      log.innerHTML = `<div class="err">${d.error}</div>`;
-    }
-  }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
-}
-
-function copyCurrentPose() {
-  if (!latestPose) return;
-  document.getElementById("tx").value = latestPose.x;
-  document.getElementById("ty").value = latestPose.y;
-  document.getElementById("tz").value = latestPose.z;
-  document.getElementById("tqx").value = latestPose.qx;
-  document.getElementById("tqy").value = latestPose.qy;
-  document.getElementById("tqz").value = latestPose.qz;
-  document.getElementById("tqw").value = latestPose.qw;
-}
-
-function sendTarget() {
-  const log = document.getElementById("moveLog");
-  const body = {
-    x: parseFloat(document.getElementById("tx").value),
-    y: parseFloat(document.getElementById("ty").value),
-    z: parseFloat(document.getElementById("tz").value),
-    qx: parseFloat(document.getElementById("tqx").value),
-    qy: parseFloat(document.getElementById("tqy").value),
-    qz: parseFloat(document.getElementById("tqz").value),
-    qw: parseFloat(document.getElementById("tqw").value),
-  };
-  if (Object.values(body).some(isNaN)) {
-    log.innerHTML = `<div class="err">Fill all fields first (use Copy Current)</div>`;
-    return;
-  }
-  fetch("/api/set_target", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(body),
-  }).then(r => r.json()).then(d => {
-    if (d.success) log.innerHTML = `<div class="ok">Target sent</div>`;
-    else log.innerHTML = `<div class="err">${d.error}</div>`;
-  }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
-}
-
-// --- Joint Control ---
-function initJointControls() {
-  const grid = document.getElementById("jointControlGrid");
-  const form = document.getElementById("jointTargetForm");
-  grid.innerHTML = JOINT_NAMES.map((name, i) =>
-    `<div style="display:flex; align-items:center; gap:6px;">
-      <span style="color:var(--dim); width:120px;">${name}</span>
-      <button class="btn-x" style="padding:6px 14px; font-size:0.9em;" onclick="moveJointDelta(${i},-1)">−</button>
-      <button class="btn-z" style="padding:6px 14px; font-size:0.9em;" onclick="moveJointDelta(${i},1)">+</button>
-    </div>`
-  ).join("");
-  form.innerHTML = JOINT_NAMES.map((name, i) =>
-    `<label style="color:var(--dim); text-align:right;">${name}:</label>
-     <input type="number" id="jt${i}" step="0.1" style="padding:3px 6px; background:var(--bg); border:1px solid var(--accent); color:var(--text); border-radius:4px; font-family:monospace;">
-     <span style="color:var(--dim); font-size:0.8em;">deg</span>
-     <span></span>`
-  ).join("");
-}
-
-function moveJointDelta(index, sign) {
-  const stepDeg = parseFloat(document.getElementById("jointStepSize").value) || 5;
-  const stepRad = stepDeg * Math.PI / 180;
-  const log = document.getElementById("jointLog");
-  fetch("/api/move_joint_delta", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({index: index, delta: sign * stepRad}),
-  }).then(r => r.json()).then(d => {
-    if (d.success) {
-      log.innerHTML = `<div class="ok">${d.joint}: ${(d.new_value * 180 / Math.PI).toFixed(1)}\u00b0</div>`;
-    } else {
-      log.innerHTML = `<div class="err">${d.error}</div>`;
-    }
-  }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
-}
-
-function copyCurrentJoints() {
-  if (!latestJoints) return;
-  for (let i = 0; i < latestJoints.length; i++) {
-    document.getElementById("jt" + i).value = (latestJoints[i] * 180 / Math.PI).toFixed(2);
-  }
-}
-
-function sendTargetJoints() {
-  const log = document.getElementById("jointLog");
-  const joints = [];
-  for (let i = 0; i < 6; i++) {
-    const val = parseFloat(document.getElementById("jt" + i).value);
-    if (isNaN(val)) { log.innerHTML = '<div class="err">Fill all fields (use Copy Current)</div>'; return; }
-    joints.push(val * Math.PI / 180);
-  }
-  fetch("/api/set_target_joint", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({joints: joints}),
-  }).then(r => r.json()).then(d => {
-    if (d.success) log.innerHTML = '<div class="ok">Joint target sent</div>';
-    else log.innerHTML = `<div class="err">${d.error}</div>`;
-  }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
-}
-
-// --- Init ---
-startStream();
-refreshControllers();
-ctrlRefreshTimer = setInterval(refreshControllers, 5000);
-initJointControls();
-
-// --- Parameters ---
-// Key control parameters to highlight (shown first, grouped)
-const KEY_PARAMS = {
-  'Task Stiffness': ['task.k_pos_x','task.k_pos_y','task.k_pos_z','task.k_rot_x','task.k_rot_y','task.k_rot_z'],
-  'Task Damping': ['task.d_pos_x','task.d_pos_y','task.d_pos_z','task.d_rot_x','task.d_rot_y','task.d_rot_z'],
-  'Nullspace': ['nullspace.stiffness','nullspace.damping','nullspace.max_tau'],
-  'Filters': ['filter.q','filter.dq','filter.output_torque','filter.target_pose'],
-  'Safety': ['max_delta_tau','limit_torques','limit_error','stop_commands'],
-};
-
-let currentParams = {};
-
-function loadParams() {
-  const ctrl = document.getElementById("paramCtrlSelect").value;
-  const container = document.getElementById("paramsContainer");
-  const log = document.getElementById("paramLog");
-  if (!ctrl) { container.innerHTML = ""; return; }
-  container.innerHTML = '<div style="color:var(--dim)">Loading...</div>';
-  fetch(`/api/params/${ctrl}`).then(r => r.json()).then(d => {
-    if (d.error) { container.innerHTML = `<div class="err">${d.error}</div>`; return; }
-    currentParams = d.params;
-    renderParams(ctrl, d.params);
-    log.innerHTML = '';
-  }).catch(e => { container.innerHTML = `<div class="err">${e}</div>`; });
-}
-
-function renderParams(ctrl, params) {
-  const container = document.getElementById("paramsContainer");
-  let html = '';
-
-  // Render key groups first
-  const rendered = new Set();
-  for (const [group, keys] of Object.entries(KEY_PARAMS)) {
-    const matching = keys.filter(k => k in params);
-    if (matching.length === 0) continue;
-    html += `<div class="param-group"><div class="param-group-title">${group}</div>`;
-    for (const k of matching) {
-      html += paramRowHtml(ctrl, k, params[k]);
-      rendered.add(k);
-    }
-    html += '</div>';
-  }
-
-  // Render remaining params
-  const remaining = Object.keys(params).filter(k => !rendered.has(k)).sort();
-  if (remaining.length > 0) {
-    html += '<div class="param-group"><div class="param-group-title">Other Parameters</div>';
-    for (const k of remaining) {
-      html += paramRowHtml(ctrl, k, params[k]);
-    }
-    html += '</div>';
-  }
-  container.innerHTML = html;
-}
-
-function paramRowHtml(ctrl, name, value) {
-  const type = typeof value;
-  const isBool = type === 'boolean';
-  const isNum = type === 'number';
-  const id = `param_${name.replace(/\./g, '_')}`;
-  let input;
-  if (isBool) {
-    input = `<select id="${id}" style="padding:3px 6px; background:var(--bg); border:1px solid var(--accent); color:var(--text); border-radius:3px; font-family:monospace; font-size:0.85em;">
-      <option value="true" ${value ? 'selected' : ''}>true</option>
-      <option value="false" ${!value ? 'selected' : ''}>false</option>
-    </select>`;
-  } else if (isNum) {
-    input = `<input type="number" id="${id}" value="${value}" step="any">`;
-  } else {
-    input = `<input type="text" id="${id}" value="${value}" readonly style="opacity:0.5">`;
-  }
-  const canSet = isBool || isNum;
-  return `<div class="param-row">
-    <span class="pname">${name}</span>
-    ${input}
-    <span class="ptype">${isBool ? 'bool' : isNum ? 'num' : type}</span>
-    ${canSet ? `<button class="pbtn" onclick="setParam('${ctrl}','${name}','${id}',${isBool})">Set</button>` : ''}
-  </div>`;
-}
-
-function setParam(ctrl, name, inputId, isBool) {
-  const el = document.getElementById(inputId);
-  let value;
-  if (isBool) {
-    value = el.value === 'true';
-  } else {
-    value = parseFloat(el.value);
-    if (isNaN(value)) { document.getElementById("paramLog").innerHTML = '<div class="err">Invalid number</div>'; return; }
-  }
-  const log = document.getElementById("paramLog");
-  log.innerHTML = `<div>Setting ${name} = ${value}...</div>`;
-  fetch(`/api/params/${ctrl}`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({params: {[name]: value}}),
-  }).then(r => r.json()).then(d => {
-    if (d.success) {
-      log.innerHTML = `<div class="ok">Set ${name} = ${value}</div>`;
-    } else {
-      log.innerHTML = `<div class="err">${d.error}</div>`;
-    }
-  }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
-}
+const JN=["shoulder_pan","shoulder_lift","elbow","wrist_1","wrist_2","wrist_3"];
+let latestPose=null, latestJoints=null;
+function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
+function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");}).catch(()=>{});}
+function switchCtrl(n){const l=document.getElementById("ctrlLog");l.innerHTML=`<div>Switching to ${n}...</div>`;fetch("/api/switch_controller",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({controller:n})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Switched to ${n}</div>`:`<div class="err">${d.error}</div>`;refreshControllers();}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
+function moveDelta(sx,sy,sz){const s=parseFloat(document.getElementById("stepSize").value)||0.02,l=document.getElementById("moveLog");fetch("/api/move_delta",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dx:sx*s,dy:sy*s,dz:sz*s})}).then(r=>r.json()).then(d=>{if(d.success){const p=d.new_position;l.innerHTML=`<div class="ok">Target: (${p.x}, ${p.y}, ${p.z})</div>`;}else l.innerHTML=`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
+function copyCurrentPose(){if(!latestPose)return;document.getElementById("tx").value=latestPose.x;document.getElementById("ty").value=latestPose.y;document.getElementById("tz").value=latestPose.z;document.getElementById("tqx").value=latestPose.qx;document.getElementById("tqy").value=latestPose.qy;document.getElementById("tqz").value=latestPose.qz;document.getElementById("tqw").value=latestPose.qw;}
+function sendTarget(){const l=document.getElementById("moveLog"),b={x:parseFloat(document.getElementById("tx").value),y:parseFloat(document.getElementById("ty").value),z:parseFloat(document.getElementById("tz").value),qx:parseFloat(document.getElementById("tqx").value),qy:parseFloat(document.getElementById("tqy").value),qz:parseFloat(document.getElementById("tqz").value),qw:parseFloat(document.getElementById("tqw").value)};if(Object.values(b).some(isNaN)){l.innerHTML='<div class="err">Fill all fields</div>';return;}fetch("/api/set_target",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?'<div class="ok">Target sent</div>':`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
+function initJointControls(){document.getElementById("jointControlGrid").innerHTML=JN.map((n,i)=>`<div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--dim);width:120px;">${n}</span><button class="btn-x" style="padding:6px 14px;font-size:0.9em;" onclick="moveJointDelta(${i},-1)">&minus;</button><button class="btn-z" style="padding:6px 14px;font-size:0.9em;" onclick="moveJointDelta(${i},1)">+</button></div>`).join("");document.getElementById("jointTargetForm").innerHTML=JN.map((n,i)=>`<label style="color:var(--dim);text-align:right;">${n}:</label><input type="number" id="jt${i}" step="0.1" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;"><span style="color:var(--dim);font-size:0.8em;">deg</span><span></span>`).join("");}
+function moveJointDelta(i,s){const r=(parseFloat(document.getElementById("jointStepSize").value)||5)*Math.PI/180,l=document.getElementById("jointLog");fetch("/api/move_joint_delta",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({index:i,delta:s*r})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">${d.joint}: ${(d.new_value*180/Math.PI).toFixed(1)}\u00b0</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
+function copyCurrentJoints(){if(!latestJoints)return;for(let i=0;i<latestJoints.length;i++)document.getElementById("jt"+i).value=(latestJoints[i]*180/Math.PI).toFixed(2);}
+function sendTargetJoints(){const l=document.getElementById("jointLog"),j=[];for(let i=0;i<6;i++){const v=parseFloat(document.getElementById("jt"+i).value);if(isNaN(v)){l.innerHTML='<div class="err">Fill all fields</div>';return;}j.push(v*Math.PI/180);}fetch("/api/set_target_joint",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({joints:j})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?'<div class="ok">Joint target sent</div>':`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
+const KEY_PARAMS={'Task Stiffness':['task.k_pos_x','task.k_pos_y','task.k_pos_z','task.k_rot_x','task.k_rot_y','task.k_rot_z'],'Task Damping':['task.d_pos_x','task.d_pos_y','task.d_pos_z','task.d_rot_x','task.d_rot_y','task.d_rot_z'],'Nullspace':['nullspace.stiffness','nullspace.damping','nullspace.max_tau'],'Filters':['filter.q','filter.dq','filter.output_torque','filter.target_pose'],'Safety':['max_delta_tau','limit_torques','limit_error','stop_commands']};
+let currentParams={};
+function loadParams(){const c=document.getElementById("paramCtrlSelect").value,ct=document.getElementById("paramsContainer"),l=document.getElementById("paramLog");if(!c){ct.innerHTML="";return;}ct.innerHTML='<div style="color:var(--dim)">Loading...</div>';fetch(`/api/params/${c}`).then(r=>r.json()).then(d=>{if(d.error){ct.innerHTML=`<div class="err">${d.error}</div>`;return;}currentParams=d.params;renderParams(c,d.params);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});}
+function renderParams(c,p){const ct=document.getElementById("paramsContainer");let h='';const rd=new Set();for(const[g,ks]of Object.entries(KEY_PARAMS)){const m=ks.filter(k=>k in p);if(!m.length)continue;h+=`<div class="param-group"><div class="param-group-title">${g}</div>`;for(const k of m){h+=paramRowHtml(c,k,p[k]);rd.add(k);}h+='</div>';}const rm=Object.keys(p).filter(k=>!rd.has(k)).sort();if(rm.length){h+='<div class="param-group"><div class="param-group-title">Other Parameters</div>';for(const k of rm)h+=paramRowHtml(c,k,p[k]);h+='</div>';}ct.innerHTML=h;}
+function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_;return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${ib?'bool':in_?'num':t}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}',${ib})">Set</button>`:''}</div>`;}
+function setParam(c,n,id,ib){const el=document.getElementById(id);let v=ib?el.value==='true':parseFloat(el.value);if(!ib&&isNaN(v)){document.getElementById("paramLog").innerHTML='<div class="err">Invalid number</div>';return;}const l=document.getElementById("paramLog");l.innerHTML=`<div>Setting ${n} = ${v}...</div>`;fetch(`/api/params/${c}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({params:{[n]:v}})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Set ${n} = ${v}</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
+startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();
 </script>
 </body>
 </html>
