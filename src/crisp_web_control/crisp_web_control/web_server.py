@@ -259,6 +259,35 @@ class WebControlServer:
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+        @app.route("/api/set_target_joint", methods=["POST"])
+        def set_target_joint():
+            """Set target joint positions. Body: {"joints": [q1, q2, ..., q6]}"""
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json()
+            try:
+                joints = np.array(data["joints"], dtype=float)
+                self.robot.set_target_joint(joints)
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/move_joint_delta", methods=["POST"])
+        def move_joint_delta():
+            """Move a single joint by a delta. Body: {"index": 0, "delta": 0.05}"""
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json()
+            try:
+                idx = int(data["index"])
+                delta = float(data["delta"])
+                current = self.robot.joint_values.copy()
+                current[idx] += delta
+                self.robot.set_target_joint(current)
+                return jsonify({"success": True, "joint": self.robot.config.joint_names[idx], "new_value": round(float(current[idx]), 4)})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         @app.route("/api/move_to", methods=["POST"])
         def move_to():
             """Linearly interpolate to a target pose using crisp_py's move_to."""
