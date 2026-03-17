@@ -29,12 +29,14 @@
   .joint-list .jval { display: inline-block; width: 100px; }
   .joint-list .jvel { display: inline-block; width: 100px; color: var(--blue); }
   .joint-list .jeff { display: inline-block; width: 90px; color: var(--orange); }
+  .joint-list .jcmd { display: inline-block; width: 90px; color: var(--highlight); }
   .joint-header { font-size: 0.8em; color: var(--dim); margin-bottom: 4px; }
   .joint-header span { display: inline-block; }
   .joint-header .jname { width: 130px; }
   .joint-header .jval { width: 100px; }
   .joint-header .jvel { width: 100px; }
   .joint-header .jeff { width: 90px; }
+  .joint-header .jcmd { width: 90px; }
 
   /* FT Sensor */
   .ft-grid { display: grid; grid-template-columns: auto 1fr 1fr 1fr auto; gap: 4px 12px; font-family: monospace; font-size: 0.95em; align-items: center; }
@@ -119,7 +121,8 @@
       <span class="jname">Joint</span>
       <span class="jval">Position</span>
       <span class="jvel">Velocity</span>
-      <span class="jeff">Effort</span>
+      <span class="jeff">Current</span>
+      <span class="jcmd">Cmd Torque</span>
     </div>
     <div class="joint-list" id="jointDisplay">—</div>
   </div>
@@ -184,6 +187,26 @@
     </div>
   </div>
 
+  <!-- Joint Control -->
+  <div class="card">
+    <h2>Joint Control</h2>
+    <div class="move-section">
+      <div class="step-row">
+        <label>Step (deg):</label>
+        <input type="number" id="jointStepSize" value="5" step="1" min="0.5" max="30">
+      </div>
+      <div id="jointControlGrid" style="display:flex; flex-direction:column; gap:6px; font-family:monospace; font-size:0.9em;"></div>
+      <hr style="border-color: var(--accent); margin: 8px 0;">
+      <h2>Send Target Joints</h2>
+      <div id="jointTargetForm" style="display:grid; grid-template-columns:auto 1fr auto auto; gap:4px 8px; align-items:center; font-size:0.9em;"></div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="btn-copy" onclick="copyCurrentJoints()">Copy Current</button>
+        <button class="btn-send" onclick="sendTargetJoints()">Send Target</button>
+      </div>
+      <div class="log" id="jointLog"></div>
+    </div>
+  </div>
+
   <!-- Controller Parameters -->
   <div class="card full-width">
     <h2>Controller Parameters</h2>
@@ -207,7 +230,12 @@ const JOINT_NAMES = [
   "shoulder_pan", "shoulder_lift", "elbow",
   "wrist_1", "wrist_2", "wrist_3"
 ];
+const JOINT_FULL_NAMES = [
+  "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+  "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
+];
 let latestPose = null;
+let latestJoints = null;
 
 // --- SSE Stream ---
 function startStream() {
@@ -224,6 +252,7 @@ function startStream() {
     dot.className = "status-dot ok";
     txt.textContent = "Connected";
     latestPose = d.pose;
+    latestJoints = d.joints;
 
     // Pose
     document.getElementById("px").textContent = d.pose.x;
@@ -238,11 +267,13 @@ function startStream() {
     const jDiv = document.getElementById("jointDisplay");
     const vel = d.velocity || [];
     const eff = d.effort || [];
+    const cmd = d.cmd_torques || [];
     jDiv.innerHTML = d.joints.map((v, i) =>
       `<div><span class="jname">${JOINT_NAMES[i]}</span>` +
       `<span class="jval">${(v * 180 / Math.PI).toFixed(1)}&deg;</span>` +
-      `<span class="jvel">${vel[i] !== undefined ? vel[i].toFixed(3) : '—'} rad/s</span>` +
-      `<span class="jeff">${eff[i] !== undefined ? eff[i].toFixed(1) : '—'} Nm</span></div>`
+      `<span class="jvel">${vel[i] !== undefined ? vel[i].toFixed(3) : '\u2014'} rad/s</span>` +
+      `<span class="jeff">${eff[i] !== undefined ? eff[i].toFixed(2) : '\u2014'} A</span>` +
+      `<span class="jcmd">${cmd[i] !== undefined ? cmd[i].toFixed(2) : '\u2014'} Nm</span></div>`
     ).join("");
 
     // FT sensor
@@ -362,10 +393,72 @@ function sendTarget() {
   }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
 }
 
+// --- Joint Control ---
+function initJointControls() {
+  const grid = document.getElementById("jointControlGrid");
+  const form = document.getElementById("jointTargetForm");
+  grid.innerHTML = JOINT_NAMES.map((name, i) =>
+    `<div style="display:flex; align-items:center; gap:6px;">
+      <span style="color:var(--dim); width:120px;">${name}</span>
+      <button class="btn-x" style="padding:6px 14px; font-size:0.9em;" onclick="moveJointDelta(${i},-1)">−</button>
+      <button class="btn-z" style="padding:6px 14px; font-size:0.9em;" onclick="moveJointDelta(${i},1)">+</button>
+    </div>`
+  ).join("");
+  form.innerHTML = JOINT_NAMES.map((name, i) =>
+    `<label style="color:var(--dim); text-align:right;">${name}:</label>
+     <input type="number" id="jt${i}" step="0.1" style="padding:3px 6px; background:var(--bg); border:1px solid var(--accent); color:var(--text); border-radius:4px; font-family:monospace;">
+     <span style="color:var(--dim); font-size:0.8em;">deg</span>
+     <span></span>`
+  ).join("");
+}
+
+function moveJointDelta(index, sign) {
+  const stepDeg = parseFloat(document.getElementById("jointStepSize").value) || 5;
+  const stepRad = stepDeg * Math.PI / 180;
+  const log = document.getElementById("jointLog");
+  fetch("/api/move_joint_delta", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({index: index, delta: sign * stepRad}),
+  }).then(r => r.json()).then(d => {
+    if (d.success) {
+      log.innerHTML = `<div class="ok">${d.joint}: ${(d.new_value * 180 / Math.PI).toFixed(1)}\u00b0</div>`;
+    } else {
+      log.innerHTML = `<div class="err">${d.error}</div>`;
+    }
+  }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
+}
+
+function copyCurrentJoints() {
+  if (!latestJoints) return;
+  for (let i = 0; i < latestJoints.length; i++) {
+    document.getElementById("jt" + i).value = (latestJoints[i] * 180 / Math.PI).toFixed(2);
+  }
+}
+
+function sendTargetJoints() {
+  const log = document.getElementById("jointLog");
+  const joints = [];
+  for (let i = 0; i < 6; i++) {
+    const val = parseFloat(document.getElementById("jt" + i).value);
+    if (isNaN(val)) { log.innerHTML = '<div class="err">Fill all fields (use Copy Current)</div>'; return; }
+    joints.push(val * Math.PI / 180);
+  }
+  fetch("/api/set_target_joint", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({joints: joints}),
+  }).then(r => r.json()).then(d => {
+    if (d.success) log.innerHTML = '<div class="ok">Joint target sent</div>';
+    else log.innerHTML = `<div class="err">${d.error}</div>`;
+  }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
+}
+
 // --- Init ---
 startStream();
 refreshControllers();
 ctrlRefreshTimer = setInterval(refreshControllers, 5000);
+initJointControls();
 
 // --- Parameters ---
 // Key control parameters to highlight (shown first, grouped)
