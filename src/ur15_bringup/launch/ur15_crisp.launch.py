@@ -1,9 +1,41 @@
+import os
+import shutil
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+from common.workspace import get_config_path
+
+
+def _get_controllers_file() -> str:
+    """Return the path to the active controllers YAML.
+
+    Uses config/ur15_controllers.yaml in the workspace root if it exists,
+    otherwise creates it from the template.
+    """
+    from ament_index_python.packages import get_package_share_directory
+
+    template_path = os.path.join(
+        get_package_share_directory("ur15_bringup"), "config", "ur15_controllers_template.yaml"
+    )
+
+    try:
+        user_config = get_config_path("ur15_controllers.yaml")
+    except RuntimeError:
+        print("[ur15_crisp] Cannot find workspace root, using template directly.")
+        return template_path
+
+    if os.path.isfile(user_config):
+        print(f"[ur15_crisp] Using config: {user_config}")
+    else:
+        shutil.copy2(template_path, user_config)
+        print(f"[ur15_crisp] Created config from template: {user_config}")
+
+    return user_config
 
 
 def generate_launch_description():
@@ -27,9 +59,7 @@ def generate_launch_description():
     use_mock_hardware = LaunchConfiguration("use_mock_hardware")
     use_rviz = LaunchConfiguration("use_rviz")
 
-    controllers_file = PathJoinSubstitution(
-        [FindPackageShare("crisp_ur15_bringup"), "config", "ur15_controllers.yaml"]
-    )
+    controllers_file = _get_controllers_file()
 
     ur_control = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(

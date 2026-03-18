@@ -25,3 +25,6 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# User config (created from template at first launch, machine-specific)
+config/ur15_controllers.yaml
