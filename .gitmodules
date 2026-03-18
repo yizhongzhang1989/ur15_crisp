@@ -6,3 +6,6 @@
 	path = src/crisp_controllers
 	url = https://github.com/yizhongzhang1989/crisp_controllers.git
 	shallow = true
+[submodule "src/vision_tracker_6d/ThirdParty/camera_calibration_toolkit"]
+	path = src/vision_tracker_6d/ThirdParty/camera_calibration_toolkit
+	url = https://github.com/yizhongzhang1989/camera_calibration_toolkit.git

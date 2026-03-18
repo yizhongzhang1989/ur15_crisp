@@ -28,3 +28,4 @@ Thumbs.db
 
 # User config (created from template at first launch, machine-specific)
 config/ur15_controllers.yaml
+config/vision_tracker.yaml
