@@ -2,12 +2,7 @@
 # ================================
 # This file configures the 6D chessboard pose tracker.
 # Copy to <workspace>/config/vision_tracker.yaml and edit as needed.
-
-# --- Chessboard Pattern ---
-chessboard:
-  rows: 7              # Number of inner corners per row
-  cols: 9              # Number of inner corners per column
-  square_size: 0.025   # Square side length in meters
+# Calibration pattern is defined in config/calibration_pattern.json (edit directly).
 
 # --- Cameras ---
 # Each camera entry defines:

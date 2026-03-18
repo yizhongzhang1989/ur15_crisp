@@ -9,6 +9,7 @@ Shared state (latest frames, detection results, pose) is exposed via
 thread-safe properties so that the web server can read them at any time.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -114,11 +115,51 @@ class VisionTracker:
                 except Exception:
                     logger.exception("Failed to load calibration for %s", name)
 
-        # --- Chessboard config ---
-        cb = self._cfg.get("chessboard", {})
-        self._cb_rows = cb.get("rows", 7)
-        self._cb_cols = cb.get("cols", 9)
-        self._cb_square = cb.get("square_size", 0.025)
+        # --- Load calibration pattern from JSON ---
+        pattern_path = os.path.join(
+            get_workspace_root(), "config", "calibration_pattern.json"
+        )
+        if not os.path.isfile(pattern_path):
+            # Copy template
+            tmpl = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "config", "calibration_pattern_template.json",
+            )
+            if not os.path.isfile(tmpl):
+                try:
+                    from ament_index_python.packages import get_package_share_directory
+                    tmpl = os.path.join(
+                        get_package_share_directory("vision_tracker_6d"),
+                        "config", "calibration_pattern_template.json",
+                    )
+                except Exception:
+                    pass
+            if os.path.isfile(tmpl):
+                os.makedirs(os.path.dirname(pattern_path), exist_ok=True)
+                shutil.copy2(tmpl, pattern_path)
+                self._node.get_logger().info(
+                    f"Copied pattern template to {pattern_path}"
+                )
+
+        self._pattern_info: dict = {}
+        self._cb_rows = 7
+        self._cb_cols = 9
+        self._cb_square = 0.025
+        if os.path.isfile(pattern_path):
+            with open(pattern_path, "r") as f:
+                self._pattern_info = json.load(f)
+            params = self._pattern_info.get("parameters", {})
+            self._cb_rows = params.get("height", 7)
+            self._cb_cols = params.get("width", 9)
+            self._cb_square = params.get("square_size", 0.025)
+            self._node.get_logger().info(
+                f"Loaded pattern: {self._pattern_info.get('pattern_id', '?')} "
+                f"{self._cb_cols}x{self._cb_rows} sq={self._cb_square}m"
+            )
+        else:
+            self._node.get_logger().warn(
+                f"Pattern config not found: {pattern_path} — using defaults"
+            )
 
         # --- Tracking config ---
         trk = self._cfg.get("tracking", {})
@@ -355,17 +396,19 @@ class VisionTracker:
                     for name in self._camera_names
                 },
                 "pose": self._latest_pose,
-                "chessboard": {
-                    "rows": self._cb_rows,
-                    "cols": self._cb_cols,
-                    "square_size": self._cb_square,
-                },
+                "pattern": self._pattern_info,
             }
 
     def get_latest_annotated_frame(self, camera_name: str) -> Optional[np.ndarray]:
         """Return the latest annotated frame for MJPEG streaming."""
         with self._lock:
             return self._latest_annotated.get(camera_name)
+
+    def get_latest_raw_frame(self, camera_name: str) -> Optional[np.ndarray]:
+        """Return the latest raw (unannotated) frame for calibration capture."""
+        with self._lock:
+            frame = self._latest_frames.get(camera_name)
+            return frame.copy() if frame is not None else None
 
     def get_camera_names(self) -> List[str]:
         return list(self._camera_names)
@@ -380,22 +423,6 @@ class VisionTracker:
     def is_tracking_enabled(self) -> bool:
         with self._lock:
             return self._tracking_enabled
-
-    def update_chessboard(self, rows: int, cols: int, square_size: float):
-        """Update chessboard parameters and rebuild detectors."""
-        with self._lock:
-            self._cb_rows = rows
-            self._cb_cols = cols
-            self._cb_square = square_size
-            self._detectors.clear()
-            for name, cal in self._calibrations.items():
-                self._detectors[name] = ChessboardDetector(
-                    rows=rows, cols=cols, square_size=square_size,
-                    camera_matrix=cal.camera_matrix,
-                    dist_coeffs=cal.dist_coeffs,
-                    **self._trk_opts,
-                )
-            self._pose_filter.reset()
 
     # ------------------------------------------------------------------
     # ROS publishing

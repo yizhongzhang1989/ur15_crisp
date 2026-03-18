@@ -153,17 +153,16 @@
       </div>
     </div>
 
-    <!-- Chessboard config -->
+    <!-- Calibration Pattern (read-only) -->
     <div class="card">
-      <h2>Chessboard Settings</h2>
-      <div class="form-grid">
-        <label>Rows:</label><input id="cbRows" type="number" min="2" max="20" value="7">
-        <label>Cols:</label><input id="cbCols" type="number" min="2" max="20" value="9">
-        <label>Square (m):</label><input id="cbSquare" type="number" step="0.001" min="0.001" value="0.025">
+      <h2>Calibration Pattern</h2>
+      <div class="info-list" style="font-family:monospace;font-size:0.85em;">
+        <div><span class="label">Type: </span><span class="val" id="patType">—</span></div>
+        <div><span class="label">Size: </span><span class="val" id="patSize">—</span></div>
+        <div><span class="label">Square: </span><span class="val" id="patSqSize">—</span></div>
+        <div id="patExtraInfo"></div>
       </div>
-      <div style="margin-top:10px;">
-        <button class="btn btn-blue" onclick="applyChessboard()">Apply</button>
-      </div>
+      <div style="margin-top:6px;font-size:0.75em;color:var(--dim);">Edit config/calibration_pattern.json to change</div>
     </div>
 
     <!-- Camera status -->
@@ -171,6 +170,34 @@
       <h2>Cameras</h2>
       <div class="cam-status-list" id="camStatusList">
         <span style="color:var(--dim);font-size:0.85em;">Loading…</span>
+      </div>
+    </div>
+
+    <!-- Intrinsic Calibration -->
+    <div class="card">
+      <h2>Intrinsic Calibration</h2>
+
+      <!-- Capture & calibrate -->
+      <div style="font-size:0.8em;color:var(--dim);margin-bottom:6px;">IMAGE CAPTURE</div>
+      <div class="control-row">
+        <button class="btn btn-orange" onclick="captureCalibImage()" id="btnCapture">Capture Image</button>
+        <span style="font-size:0.9em;">Images: <strong id="calibCount">0</strong></span>
+      </div>
+      <div class="control-row">
+        <button class="btn btn-green" onclick="runCalibration()" id="btnCalibrate">Calibrate</button>
+        <button class="btn btn-red" onclick="deleteCalibImages()" style="font-size:0.8em;padding:5px 12px;">Clear Images</button>
+        <span id="calibStatus" style="font-size:0.85em;color:var(--dim);"></span>
+      </div>
+
+      <!-- Result -->
+      <div id="calibResult" style="display:none;margin-top:10px;padding:10px;background:rgba(0,0,0,0.2);border-radius:4px;">
+        <div style="font-size:0.8em;color:var(--dim);margin-bottom:4px;">CALIBRATION RESULT</div>
+        <div class="info-list" style="font-family:monospace;font-size:0.85em;">
+          <div>RMS Error: <span class="val ok" id="calRms">—</span> px</div>
+          <div>fx: <span class="val" id="calFx">—</span> &nbsp; fy: <span class="val" id="calFy">—</span></div>
+          <div>cx: <span class="val" id="calCx">—</span> &nbsp; cy: <span class="val" id="calCy">—</span></div>
+          <div>Distortion: <span class="val" id="calDist" style="font-size:0.8em;word-break:break-all;">—</span></div>
+        </div>
       </div>
     </div>
 
@@ -293,12 +320,24 @@
       document.getElementById('poseErr').textContent = '—';
     }
 
-    // Chessboard — update inputs only on first load
-    if (d.chessboard && !window._cbLoaded) {
-      document.getElementById('cbRows').value = d.chessboard.rows;
-      document.getElementById('cbCols').value = d.chessboard.cols;
-      document.getElementById('cbSquare').value = d.chessboard.square_size;
-      window._cbLoaded = true;
+    // Calibration image count
+    if (d.calib_image_count != null) {
+      document.getElementById('calibCount').textContent = d.calib_image_count;
+    }
+
+    // Pattern info (read-only display)
+    if (d.pattern && !window._patLoaded) {
+      var pat = d.pattern;
+      var params = pat.parameters || {};
+      var typeNames = {standard_chessboard:'Standard Chessboard', charuco_board:'ChArUco Board', grid_board:'Grid Board'};
+      document.getElementById('patType').textContent = typeNames[pat.pattern_id] || pat.pattern_id || '—';
+      document.getElementById('patSize').textContent = (params.width || '?') + ' × ' + (params.height || '?');
+      document.getElementById('patSqSize').textContent = (params.square_size || '?') + ' m';
+      var extra = document.getElementById('patExtraInfo');
+      extra.innerHTML = '';
+      if (params.marker_size) extra.innerHTML += '<div><span class="label">Marker: </span><span class="val">' + params.marker_size + ' m</span></div>';
+      if (params.dictionary_id != null) extra.innerHTML += '<div><span class="label">Dict ID: </span><span class="val">' + params.dictionary_id + '</span></div>';
+      window._patLoaded = true;
     }
   }
 
@@ -377,28 +416,88 @@
     });
   };
 
-  window.applyChessboard = function() {
-    const rows = parseInt(document.getElementById('cbRows').value);
-    const cols = parseInt(document.getElementById('cbCols').value);
-    const sq = parseFloat(document.getElementById('cbSquare').value);
-    if (isNaN(rows) || isNaN(cols) || isNaN(sq) || rows < 2 || cols < 2 || sq <= 0) {
-      log('Invalid chessboard parameters', 'err');
-      return;
-    }
-    fetch('/api/chessboard', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({rows: rows, cols: cols, square_size: sq})
-    }).then(function(r) { return r.json(); }).then(function(d) {
-      log('Chessboard updated: ' + d.rows + 'x' + d.cols + ' sq=' + d.square_size + 'm', 'ok');
-    }).catch(function(err) {
-      log('Error: ' + err, 'err');
-    });
-  };
-
   // --- Init ----------------------------------------------------------
   connectSSE();
   log('UI loaded');
+
+  // --- Calibration ---------------------------------------------------
+  window.captureCalibImage = function() {
+    document.getElementById('btnCapture').disabled = true;
+    fetch('/api/calib/capture', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({camera: activeCamera})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.error) { log('Capture error: ' + d.error, 'err'); return; }
+      document.getElementById('calibCount').textContent = d.count;
+      log('Captured ' + d.saved + ' (total: ' + d.count + ')', 'ok');
+    }).catch(function(err) {
+      log('Capture error: ' + err, 'err');
+    }).finally(function() {
+      document.getElementById('btnCapture').disabled = false;
+    });
+  };
+
+  window.deleteCalibImages = function() {
+    if (!confirm('Delete all captured calibration images?')) return;
+    fetch('/api/calib/images/delete', { method: 'POST' })
+    .then(function(r) { return r.json(); }).then(function(d) {
+      document.getElementById('calibCount').textContent = 0;
+      log('Calibration images cleared', 'ok');
+    });
+  };
+
+  window.runCalibration = function() {
+    document.getElementById('btnCalibrate').disabled = true;
+    document.getElementById('calibStatus').textContent = 'Running…';
+    document.getElementById('calibStatus').style.color = 'var(--orange)';
+    fetch('/api/calib/run', { method: 'POST' })
+    .then(function(r) { return r.json(); }).then(function(d) {
+      if (d.error) {
+        log('Calibration error: ' + d.error, 'err');
+        document.getElementById('calibStatus').textContent = d.error;
+        document.getElementById('calibStatus').style.color = 'var(--highlight)';
+        document.getElementById('btnCalibrate').disabled = false;
+        return;
+      }
+      log('Calibration started with ' + d.image_count + ' images…', 'ok');
+      pollCalibStatus();
+    }).catch(function(err) {
+      log('Error: ' + err, 'err');
+      document.getElementById('btnCalibrate').disabled = false;
+      document.getElementById('calibStatus').textContent = '';
+    });
+  };
+
+  function pollCalibStatus() {
+    fetch('/api/calib/status').then(function(r) { return r.json(); }).then(function(d) {
+      if (d.running) {
+        setTimeout(pollCalibStatus, 1000);
+        return;
+      }
+      document.getElementById('btnCalibrate').disabled = false;
+      if (d.error) {
+        document.getElementById('calibStatus').textContent = d.error;
+        document.getElementById('calibStatus').style.color = 'var(--highlight)';
+        log('Calibration failed: ' + d.error, 'err');
+      } else if (d.result) {
+        document.getElementById('calibStatus').textContent = 'Done! RMS=' + d.result.rms_error + 'px';
+        document.getElementById('calibStatus').style.color = 'var(--green)';
+        showCalibResult(d.result);
+        log('Calibration complete: RMS=' + d.result.rms_error + 'px', 'ok');
+      }
+    });
+  }
+
+  function showCalibResult(r) {
+    document.getElementById('calibResult').style.display = 'block';
+    document.getElementById('calRms').textContent = r.rms_error;
+    document.getElementById('calFx').textContent = r.fx;
+    document.getElementById('calFy').textContent = r.fy;
+    document.getElementById('calCx').textContent = r.cx;
+    document.getElementById('calCy').textContent = r.cy;
+    document.getElementById('calDist').textContent = r.dist_coeffs.join(', ');
+  }
 
 })();
 </script>
