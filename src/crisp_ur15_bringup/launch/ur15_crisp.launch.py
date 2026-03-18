@@ -8,6 +8,8 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+from common.workspace import get_config_path
+
 
 def _get_controllers_file() -> str:
     """Return the path to the active controllers YAML.
@@ -21,18 +23,11 @@ def _get_controllers_file() -> str:
         get_package_share_directory("crisp_ur15_bringup"), "config", "ur15_controllers_template.yaml"
     )
 
-    # Find workspace root: walk up from this file to find config/ dir
-    ws_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    # Fallback: check common location
-    if not os.path.isdir(os.path.join(ws_root, "config")):
-        # Try from CWD
-        ws_root = os.getcwd()
-    if not os.path.isdir(os.path.join(ws_root, "config")):
-        # Last resort: use template directly
-        print("[ur15_crisp] Cannot find workspace config/ dir, using template directly.")
+    try:
+        user_config = get_config_path("ur15_controllers.yaml")
+    except RuntimeError:
+        print("[ur15_crisp] Cannot find workspace root, using template directly.")
         return template_path
-
-    user_config = os.path.join(ws_root, "config", "ur15_controllers.yaml")
 
     if os.path.isfile(user_config):
         print(f"[ur15_crisp] Using config: {user_config}")

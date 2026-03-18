@@ -22,17 +22,18 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from crisp_py.robot import make_robot
 from crisp_py.control.parameters_client import ParametersClient
+from common.workspace import get_config_path
 
 _CRISP_CONTROLLERS = ["gravity_compensation", "cartesian_impedance_controller", "joint_impedance_controller"]
 
 
 def _find_workspace_config():
     """Find config/ur15_controllers.yaml in the workspace root."""
-    for candidate in [os.getcwd(), os.path.expanduser("~/Documents/ur15_crisp")]:
-        path = os.path.join(candidate, "config", "ur15_controllers.yaml")
-        if os.path.isdir(os.path.join(candidate, "config")):
-            return path
-    return None
+    try:
+        path = get_config_path("ur15_controllers.yaml")
+        return path
+    except RuntimeError:
+        return None
 
 
 def _set_nested(d: dict, keys: list, value):
