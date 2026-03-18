@@ -12,9 +12,8 @@
 #   framerate:        (optional) capture framerate for usb_cam (default 30)
 #   image_width:      (optional) capture width for usb_cam  (default 1280)
 #   image_height:     (optional) capture height for usb_cam (default 720)
-#   calibration_file: path to calibration_data.json from camera_calibration_toolkit
-#                     (absolute path, or relative to this config file's directory)
 #   enabled:          whether to use this camera
+# Intrinsic calibration is loaded from config/intrinsic_calibration_result.json
 cameras:
   - name: cam0
     image_topic: /cam0/image_raw
@@ -22,12 +21,10 @@ cameras:
     framerate: 30
     image_width: 1280
     image_height: 720
-    calibration_file: ""
     enabled: true
   # - name: cam1
   #   image_topic: /cam1/image_raw
   #   video_device: /dev/video2
-  #   calibration_file: ""
   #   enabled: true
 
 # --- Tracking ---

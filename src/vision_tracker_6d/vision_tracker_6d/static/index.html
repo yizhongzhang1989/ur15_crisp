@@ -99,6 +99,7 @@
     <span><span class="status-dot wait" id="connDot"></span><span id="connText">Connecting…</span></span>
     <span>FPS: <strong id="fpsVal">—</strong></span>
     <span>Detection: <span class="status-dot wait" id="detDot"></span><span id="detText">—</span></span>
+    <span>Intrinsic: <span class="status-dot wait" id="intDot"></span></span>
   </div>
 </div>
 
@@ -262,6 +263,16 @@
     // FPS
     fpsVal.textContent = d.fps != null ? d.fps : '—';
 
+    // Intrinsic calibration status
+    var intDot = document.getElementById('intDot');
+    if (d.has_detector) {
+      intDot.className = 'status-dot ok';
+    } else if (d.has_intrinsic) {
+      intDot.className = 'status-dot warn';
+    } else {
+      intDot.className = 'status-dot off';
+    }
+
     // Detection status
     if (d.detection_active) {
       detDot.className = 'status-dot ok';
@@ -386,7 +397,6 @@
         '<span class="cam-name">' + name + '</span>' +
         '<span class="badges">' +
           '<span class="badge ' + (c.receiving ? 'open' : 'closed') + '">' + (c.receiving ? 'Receiving' : 'No data') + '</span>' +
-          '<span class="badge ' + (c.has_calibration ? 'cal' : 'nocal') + '">' + (c.has_calibration ? 'Calibrated' : 'No cal') + '</span>' +
         '</span>';
       list.appendChild(pill);
     });

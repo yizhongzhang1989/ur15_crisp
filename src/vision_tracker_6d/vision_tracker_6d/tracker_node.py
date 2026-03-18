@@ -30,7 +30,7 @@ from std_msgs.msg import Bool
 
 from common.workspace import get_workspace_root
 from .calibration_loader import load_calibration, CameraCalibration
-from .chessboard_detector import ChessboardDetector, DetectionResult
+from .pattern_detector import PatternDetector, DetectionResult
 from .pose_filter import PoseFilter
 
 logger = logging.getLogger(__name__)
@@ -94,33 +94,39 @@ class VisionTracker:
         self._config_path = _find_config()
         self._cfg = _load_config(self._config_path)
 
-        # --- Camera config (topics + calibration) ---
+        # --- Camera config (topics) ---
         cam_cfgs: List[dict] = self._cfg.get("cameras", [])
         self._camera_names: List[str] = []
-
-        # --- Calibration per camera ---
-        self._calibrations: Dict[str, CameraCalibration] = {}
-        cfg_dir = os.path.dirname(self._config_path)
         for cam_cfg in cam_cfgs:
             if not cam_cfg.get("enabled", True):
                 continue
-            name = cam_cfg["name"]
-            self._camera_names.append(name)
-            cal_file = cam_cfg.get("calibration_file", "")
-            if cal_file:
-                if not os.path.isabs(cal_file):
-                    cal_file = os.path.join(cfg_dir, cal_file)
-                try:
-                    self._calibrations[name] = load_calibration(cal_file)
-                except Exception:
-                    logger.exception("Failed to load calibration for %s", name)
+            self._camera_names.append(cam_cfg["name"])
+
+        # --- Load intrinsic calibration ---
+        ws = get_workspace_root()
+        intrinsic_path = os.path.join(ws, "config", "intrinsic_calibration_result.json")
+        self._intrinsic: Optional[CameraCalibration] = None
+        if os.path.isfile(intrinsic_path):
+            try:
+                self._intrinsic = load_calibration(intrinsic_path)
+                self._node.get_logger().info(
+                    f"Loaded intrinsic calibration: fx={self._intrinsic.camera_matrix[0,0]:.1f} "
+                    f"fy={self._intrinsic.camera_matrix[1,1]:.1f} "
+                    f"rms={self._intrinsic.rms_error or 0:.4f}"
+                )
+            except Exception:
+                self._node.get_logger().error(
+                    f"Failed to load intrinsic calibration from {intrinsic_path}"
+                )
+        else:
+            self._node.get_logger().warn(
+                f"No intrinsic calibration found at {intrinsic_path} — "
+                "run calibration first. Tracking will show video only."
+            )
 
         # --- Load calibration pattern from JSON ---
-        pattern_path = os.path.join(
-            get_workspace_root(), "config", "calibration_pattern.json"
-        )
+        pattern_path = os.path.join(ws, "config", "calibration_pattern.json")
         if not os.path.isfile(pattern_path):
-            # Copy template
             tmpl = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 "..", "config", "calibration_pattern_template.json",
@@ -137,50 +143,31 @@ class VisionTracker:
             if os.path.isfile(tmpl):
                 os.makedirs(os.path.dirname(pattern_path), exist_ok=True)
                 shutil.copy2(tmpl, pattern_path)
-                self._node.get_logger().info(
-                    f"Copied pattern template to {pattern_path}"
-                )
+                self._node.get_logger().info(f"Copied pattern template to {pattern_path}")
 
         self._pattern_info: dict = {}
-        self._cb_rows = 7
-        self._cb_cols = 9
-        self._cb_square = 0.025
         if os.path.isfile(pattern_path):
             with open(pattern_path, "r") as f:
                 self._pattern_info = json.load(f)
-            params = self._pattern_info.get("parameters", {})
-            self._cb_rows = params.get("height", 7)
-            self._cb_cols = params.get("width", 9)
-            self._cb_square = params.get("square_size", 0.025)
             self._node.get_logger().info(
                 f"Loaded pattern: {self._pattern_info.get('pattern_id', '?')} "
-                f"{self._cb_cols}x{self._cb_rows} sq={self._cb_square}m"
+                f"{self._pattern_info.get('parameters', {}).get('width', '?')}x"
+                f"{self._pattern_info.get('parameters', {}).get('height', '?')}"
             )
         else:
-            self._node.get_logger().warn(
-                f"Pattern config not found: {pattern_path} — using defaults"
-            )
+            self._node.get_logger().warn(f"Pattern config not found: {pattern_path}")
 
-        # --- Tracking config ---
-        trk = self._cfg.get("tracking", {})
-        self._trk_opts = {
-            "use_subpix": trk.get("use_subpix", True),
-            "adaptive_threshold": trk.get("adaptive_threshold", True),
-            "normalize_image": trk.get("normalize_image", True),
-            "fast_check": trk.get("fast_check", True),
-        }
-
-        # --- Detectors per camera ---
-        self._detectors: Dict[str, ChessboardDetector] = {}
-        for name, cal in self._calibrations.items():
-            self._detectors[name] = ChessboardDetector(
-                rows=self._cb_rows,
-                cols=self._cb_cols,
-                square_size=self._cb_square,
-                camera_matrix=cal.camera_matrix,
-                dist_coeffs=cal.dist_coeffs,
-                **self._trk_opts,
-            )
+        # --- Create detector (shared for all cameras — same intrinsics) ---
+        self._detector: Optional[PatternDetector] = None
+        if self._intrinsic is not None and self._pattern_info:
+            try:
+                self._detector = PatternDetector(
+                    pattern_config=self._pattern_info,
+                    camera_matrix=self._intrinsic.camera_matrix,
+                    dist_coeffs=self._intrinsic.dist_coeffs,
+                )
+            except Exception:
+                self._node.get_logger().error("Failed to create PatternDetector", exc_info=True)
 
         # --- Pose filter ---
         flt = self._cfg.get("filter", {})
@@ -262,19 +249,19 @@ class VisionTracker:
                 self._latest_annotated[camera_name] = annotated
             return
 
-        # Detect chessboard
-        detector = self._detectors.get(camera_name)
-        if detector is None:
+        # Detect pattern
+        if self._detector is None:
             annotated = frame.copy()
+            msg_text = "No calibration" if self._intrinsic is None else "No pattern"
             cv2.putText(
-                annotated, "No calibration", (20, 40),
+                annotated, msg_text, (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2,
             )
             with self._lock:
                 self._latest_annotated[camera_name] = annotated
             return
 
-        result = detector.detect(frame, draw=True)
+        result = self._detector.detect(frame, draw=True)
         with self._lock:
             self._latest_results[camera_name] = result
             if result.image_with_corners is not None:
@@ -282,8 +269,8 @@ class VisionTracker:
 
         # Pose estimation
         if result.found and result.rvec is not None:
-            T = ChessboardDetector.rvec_tvec_to_matrix(result.rvec, result.tvec)
-            pos, quat = ChessboardDetector.matrix_to_quaternion(T)
+            T = PatternDetector.rvec_tvec_to_matrix(result.rvec, result.tvec)
+            pos, quat = PatternDetector.matrix_to_quaternion(T)
             pos, quat = self._pose_filter.update(pos, quat)
 
             pose_dict = {
@@ -391,10 +378,11 @@ class VisionTracker:
                 "cameras": {
                     name: {
                         "receiving": self._cameras_receiving.get(name, False),
-                        "has_calibration": name in self._calibrations,
                     }
                     for name in self._camera_names
                 },
+                "has_intrinsic": self._intrinsic is not None,
+                "has_detector": self._detector is not None,
                 "pose": self._latest_pose,
                 "pattern": self._pattern_info,
             }
