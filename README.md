@@ -122,6 +122,14 @@ ros2 param set /cartesian_impedance_controller task.d_pos_x 250.0
 ros2 param set /joint_impedance_controller nullspace.stiffness 15.0
 ```
 
+You can also use `rqt_reconfigure` for a graphical parameter editor:
+
+```bash
+ros2 run rqt_reconfigure rqt_reconfigure
+```
+
+Select the controller node (e.g., `cartesian_impedance_controller`) from the tree to view and adjust all parameters with sliders and input fields.
+
 ## Critical Notes for UR Robots
 
 ### 1. Gravity & Coriolis Compensation — MUST be disabled
@@ -212,6 +220,39 @@ robot.shutdown()
 See [scripts/test_crisp_py.py](scripts/test_crisp_py.py) for a complete figure-eight example.
 
 > **Note**: `crisp_py` requires `>=3.11` in its pyproject.toml, but works on Python 3.10 (ROS Humble). The submodule has this constraint relaxed to `>=3.10`.
+
+## RViz Interactive Control
+
+You can control the robot's Cartesian target pose by dragging a 6-DOF interactive marker in RViz.
+
+### Launch
+
+With CRISP controllers already running:
+
+```bash
+source install/setup.bash
+ros2 launch web_control rviz_control.launch.py
+```
+
+This starts RViz with the robot model, TF frames, and an interactive marker at the current end-effector pose.
+
+### Usage
+
+1. **Add the interactive marker display** (first time only):
+   - In RViz, click **Add** (bottom-left) → **By topic** → expand `/target_pose_marker` → select **InteractiveMarkers** → click **OK**
+   - The 6-DOF marker (red sphere with arrows and rings) appears at the EE pose
+2. **Activate `cartesian_impedance_controller`** (if not already active):
+   ```bash
+   ros2 control switch_controllers --activate cartesian_impedance_controller --deactivate scaled_joint_trajectory_controller
+   ```
+3. **Switch to Interact mode**: press **I** or click the hand icon in the RViz toolbar
+4. **Drag the marker**:
+   - **Arrows** (red/green/blue along X/Y/Z) — translate the target pose
+   - **Rings** (circles around X/Y/Z) — rotate the target orientation
+5. The robot follows the marker in real time via `/target_pose`
+6. **Switch to MoveCamera mode**: press **M** to rotate/pan/zoom the 3D view
+
+> **Safety**: Start with small movements. The marker publishes immediately — keep within ~10–20 cm of the current pose to avoid hitting torque limits.
 
 ## Structure
 

@@ -13,6 +13,7 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         (os.path.join("share", package_name, "launch"), glob("launch/*.py")),
         (os.path.join("share", package_name, "static"), glob("web_control/static/*")),
+        (os.path.join("share", package_name, "config"), glob("config/*")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -22,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "web_server = web_control.web_server:main",
+            "target_pose_marker = web_control.target_pose_marker:main",
         ],
     },
 )
