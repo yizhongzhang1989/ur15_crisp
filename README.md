@@ -32,10 +32,10 @@ source install/setup.bash
 pip3 install src/crisp_py
 
 # 6. Launch with mock hardware (verify build works)
-ros2 launch crisp_ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true
+ros2 launch ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true
 
 # 7. Launch with real UR15 (see "Launching on Real Hardware" below)
-ros2 launch crisp_ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
+ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
 ```
 
 ## Launching on Real Hardware
@@ -60,7 +60,7 @@ sleep 10
 kill %1
 
 # 4. Launch CRISP controllers
-ros2 launch crisp_ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
+ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
 ```
 
 If the teach pendant is accessible, simply start the **External Control** program on the pendant, then run step 4.
@@ -220,7 +220,7 @@ ur15_crisp/
 ├── src/
 │   ├── crisp_controllers/        # [submodule] utiasDSL/crisp_controllers v2.1.0
 │   ├── crisp_py/                 # [submodule] utiasDSL/crisp_py v3.4.0
-│   └── crisp_ur15_bringup/       # UR15-specific bringup (config + launch)
+│   └── ur15_bringup/       # UR15-specific bringup (config + launch)
 │       ├── config/
 │       │   └── ur15_controllers.yaml
 │       └── launch/
@@ -234,8 +234,8 @@ ur15_crisp/
 
 | Action | Command |
 |---|---|
-| Launch (mock) | `ros2 launch crisp_ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true` |
-| Launch (real) | `ros2 launch crisp_ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15` |
+| Launch (mock) | `ros2 launch ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true` |
+| Launch (real) | `ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15` |
 | List controllers | `ros2 control list_controllers` |
 | List HW interfaces | `ros2 control list_hardware_interfaces` |
 | Check joint states | `ros2 topic echo /joint_states --once` |

@@ -514,7 +514,7 @@ class WebControlServer:
         # Installed via colcon
         try:
             from ament_index_python.packages import get_package_share_directory
-            installed = os.path.join(get_package_share_directory("crisp_web_control"), "static")
+            installed = os.path.join(get_package_share_directory("web_control"), "static")
             if os.path.isdir(installed):
                 return installed
         except Exception:

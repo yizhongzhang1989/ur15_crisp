@@ -2,7 +2,7 @@ import os
 from glob import glob
 from setuptools import setup
 
-package_name = "crisp_web_control"
+package_name = "web_control"
 
 setup(
     name=package_name,
@@ -12,7 +12,7 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
         (os.path.join("share", package_name, "launch"), glob("launch/*.py")),
-        (os.path.join("share", package_name, "static"), glob("crisp_web_control/static/*")),
+        (os.path.join("share", package_name, "static"), glob("web_control/static/*")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -21,7 +21,7 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
-            "web_server = crisp_web_control.web_server:main",
+            "web_server = web_control.web_server:main",
         ],
     },
 )

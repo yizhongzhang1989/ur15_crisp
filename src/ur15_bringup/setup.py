@@ -3,7 +3,7 @@ from glob import glob
 
 from setuptools import find_packages, setup
 
-package_name = 'crisp_ur15_bringup'
+package_name = 'ur15_bringup'
 
 setup(
     name=package_name,

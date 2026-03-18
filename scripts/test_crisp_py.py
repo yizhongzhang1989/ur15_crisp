@@ -6,7 +6,7 @@ Usage:
     python3 scripts/test_crisp_py.py
 
 Requires the CRISP launch to be running:
-    ros2 launch crisp_ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
+    ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
 """
 import time
 

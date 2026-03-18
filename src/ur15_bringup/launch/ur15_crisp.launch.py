@@ -20,7 +20,7 @@ def _get_controllers_file() -> str:
     from ament_index_python.packages import get_package_share_directory
 
     template_path = os.path.join(
-        get_package_share_directory("crisp_ur15_bringup"), "config", "ur15_controllers_template.yaml"
+        get_package_share_directory("ur15_bringup"), "config", "ur15_controllers_template.yaml"
     )
 
     try:
