@@ -1,0 +1,13 @@
+{
+  "pattern_id": "charuco_board",
+  "name": "ChArUco Board",
+  "description": "Calibration pattern",
+  "is_planar": true,
+  "parameters": {
+    "width": 12,
+    "height": 9,
+    "square_size": 0.015,
+    "marker_size": 0.01125,
+    "dictionary_id": 6
+  }
+}

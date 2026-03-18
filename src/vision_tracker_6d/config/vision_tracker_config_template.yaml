@@ -2,7 +2,8 @@
 # ================================
 # This file configures the 6D chessboard pose tracker.
 # Copy to <workspace>/config/vision_tracker.yaml and edit as needed.
-# Calibration pattern is defined in config/calibration_pattern.json (edit directly).
+# Calibration pattern: config/intrinsic_calibration_pattern.json
+# Tracking pattern:    config/tracking_pattern.json
 
 # --- Cameras ---
 # Each camera entry defines:

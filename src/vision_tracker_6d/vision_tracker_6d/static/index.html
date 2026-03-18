@@ -154,16 +154,16 @@
       </div>
     </div>
 
-    <!-- Calibration Pattern (read-only) -->
+    <!-- Tracking Pattern (read-only) -->
     <div class="card">
-      <h2>Calibration Pattern</h2>
+      <h2>Tracking Pattern</h2>
       <div class="info-list" style="font-family:monospace;font-size:0.85em;">
-        <div><span class="label">Type: </span><span class="val" id="patType">—</span></div>
-        <div><span class="label">Size: </span><span class="val" id="patSize">—</span></div>
-        <div><span class="label">Square: </span><span class="val" id="patSqSize">—</span></div>
-        <div id="patExtraInfo"></div>
+        <div><span class="label">Type: </span><span class="val" id="trkPatType">—</span></div>
+        <div><span class="label">Size: </span><span class="val" id="trkPatSize">—</span></div>
+        <div><span class="label">Square: </span><span class="val" id="trkPatSqSize">—</span></div>
+        <div id="trkPatExtraInfo"></div>
       </div>
-      <div style="margin-top:6px;font-size:0.75em;color:var(--dim);">Edit config/calibration_pattern.json to change</div>
+      <div style="margin-top:6px;font-size:0.75em;color:var(--dim);">Edit config/tracking_pattern.json to change</div>
     </div>
 
     <!-- Camera status -->
@@ -177,6 +177,20 @@
     <!-- Intrinsic Calibration -->
     <div class="card">
       <h2>Intrinsic Calibration</h2>
+
+      <!-- Calibration pattern info (read-only) -->
+      <div style="margin-bottom:10px;">
+        <div style="font-size:0.8em;color:var(--dim);margin-bottom:4px;">CALIBRATION PATTERN</div>
+        <div class="info-list" style="font-family:monospace;font-size:0.85em;">
+          <div><span class="label">Type: </span><span class="val" id="calPatType">—</span></div>
+          <div><span class="label">Size: </span><span class="val" id="calPatSize">—</span></div>
+          <div><span class="label">Square: </span><span class="val" id="calPatSqSize">—</span></div>
+          <div id="calPatExtraInfo"></div>
+        </div>
+        <div style="font-size:0.7em;color:var(--dim);">Edit config/intrinsic_calibration_pattern.json to change</div>
+      </div>
+
+      <hr class="sep">
 
       <!-- Capture & calibrate -->
       <div style="font-size:0.8em;color:var(--dim);margin-bottom:6px;">IMAGE CAPTURE</div>
@@ -336,19 +350,19 @@
       document.getElementById('calibCount').textContent = d.calib_image_count;
     }
 
-    // Pattern info (read-only display)
-    if (d.pattern && !window._patLoaded) {
+    // Tracking pattern info (read-only display from SSE)
+    if (d.pattern && !window._trkPatLoaded) {
       var pat = d.pattern;
       var params = pat.parameters || {};
       var typeNames = {standard_chessboard:'Standard Chessboard', charuco_board:'ChArUco Board', grid_board:'Grid Board'};
-      document.getElementById('patType').textContent = typeNames[pat.pattern_id] || pat.pattern_id || '—';
-      document.getElementById('patSize').textContent = (params.width || '?') + ' × ' + (params.height || '?');
-      document.getElementById('patSqSize').textContent = (params.square_size || '?') + ' m';
-      var extra = document.getElementById('patExtraInfo');
+      document.getElementById('trkPatType').textContent = typeNames[pat.pattern_id] || pat.pattern_id || '—';
+      document.getElementById('trkPatSize').textContent = (params.width || '?') + ' × ' + (params.height || '?');
+      document.getElementById('trkPatSqSize').textContent = (params.square_size || '?') + ' m';
+      var extra = document.getElementById('trkPatExtraInfo');
       extra.innerHTML = '';
       if (params.marker_size) extra.innerHTML += '<div><span class="label">Marker: </span><span class="val">' + params.marker_size + ' m</span></div>';
       if (params.dictionary_id != null) extra.innerHTML += '<div><span class="label">Dict ID: </span><span class="val">' + params.dictionary_id + '</span></div>';
-      window._patLoaded = true;
+      window._trkPatLoaded = true;
     }
   }
 
@@ -428,7 +442,27 @@
 
   // --- Init ----------------------------------------------------------
   connectSSE();
+  loadCalibPattern();
   log('UI loaded');
+
+  // --- Load intrinsic calibration pattern (once at init) -------------
+  function loadCalibPattern() {
+    fetch('/api/calib/pattern').then(function(r) {
+      if (!r.ok) return null;
+      return r.json();
+    }).then(function(d) {
+      if (!d || d.error) return;
+      var params = d.parameters || {};
+      var typeNames = {standard_chessboard:'Standard Chessboard', charuco_board:'ChArUco Board', grid_board:'Grid Board'};
+      document.getElementById('calPatType').textContent = typeNames[d.pattern_id] || d.pattern_id || '—';
+      document.getElementById('calPatSize').textContent = (params.width || '?') + ' × ' + (params.height || '?');
+      document.getElementById('calPatSqSize').textContent = (params.square_size || '?') + ' m';
+      var extra = document.getElementById('calPatExtraInfo');
+      extra.innerHTML = '';
+      if (params.marker_size) extra.innerHTML += '<div><span class="label">Marker: </span><span class="val">' + params.marker_size + ' m</span></div>';
+      if (params.dictionary_id != null) extra.innerHTML += '<div><span class="label">Dict ID: </span><span class="val">' + params.dictionary_id + '</span></div>';
+    });
+  }
 
   // --- Calibration ---------------------------------------------------
   window.captureCalibImage = function() {

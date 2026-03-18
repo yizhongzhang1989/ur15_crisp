@@ -245,8 +245,11 @@ class VisionTrackerWebServer:
 
         @app.route("/api/calib/pattern", methods=["GET"])
         def calib_pattern_get():
-            """Get the current calibration pattern config."""
+            """Get the current intrinsic calibration pattern config."""
             path = self._calib_pattern_path()
+            if not os.path.isfile(path):
+                # Copy template
+                self._ensure_calib_pattern_template(path)
             if not os.path.isfile(path):
                 return jsonify({"error": "not found"}), 404
             with open(path, "r") as f:
@@ -265,7 +268,28 @@ class VisionTrackerWebServer:
         return os.path.join(get_workspace_root(), "tmp", "intrinsic_calib_results")
 
     def _calib_pattern_path(self) -> str:
-        return os.path.join(get_workspace_root(), "config", "calibration_pattern.json")
+        return os.path.join(get_workspace_root(), "config", "intrinsic_calibration_pattern.json")
+
+    def _ensure_calib_pattern_template(self, path: str):
+        """Copy intrinsic calibration pattern template if the file doesn't exist."""
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "config", "intrinsic_calibration_pattern_template.json"),
+        ]
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            candidates.append(os.path.join(
+                get_package_share_directory("vision_tracker_6d"),
+                "config", "intrinsic_calibration_pattern_template.json",
+            ))
+        except Exception:
+            pass
+        for tmpl in candidates:
+            if os.path.isfile(tmpl):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                import shutil
+                shutil.copy2(tmpl, path)
+                return
 
     def _count_calib_images(self) -> int:
         d = self._calib_images_dir()

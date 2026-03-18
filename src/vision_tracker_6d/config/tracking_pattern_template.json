@@ -1,0 +1,12 @@
+{
+  "pattern_id": "grid_board",
+  "name": "Marker Grid",
+  "description": "Grid of ArUco markers for robust camera calibration detection",
+  "is_planar": true,
+  "parameters": {
+    "width": 1,
+    "height": 1,
+    "marker_size": 0.053,
+    "dictionary_id": 10
+  }
+}

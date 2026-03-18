@@ -124,26 +124,26 @@ class VisionTracker:
                 "run calibration first. Tracking will show video only."
             )
 
-        # --- Load calibration pattern from JSON ---
-        pattern_path = os.path.join(ws, "config", "calibration_pattern.json")
+        # --- Load tracking pattern from JSON ---
+        pattern_path = os.path.join(ws, "config", "tracking_pattern.json")
         if not os.path.isfile(pattern_path):
             tmpl = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
-                "..", "config", "calibration_pattern_template.json",
+                "..", "config", "tracking_pattern_template.json",
             )
             if not os.path.isfile(tmpl):
                 try:
                     from ament_index_python.packages import get_package_share_directory
                     tmpl = os.path.join(
                         get_package_share_directory("vision_tracker_6d"),
-                        "config", "calibration_pattern_template.json",
+                        "config", "tracking_pattern_template.json",
                     )
                 except Exception:
                     pass
             if os.path.isfile(tmpl):
                 os.makedirs(os.path.dirname(pattern_path), exist_ok=True)
                 shutil.copy2(tmpl, pattern_path)
-                self._node.get_logger().info(f"Copied pattern template to {pattern_path}")
+                self._node.get_logger().info(f"Copied tracking pattern template to {pattern_path}")
 
         self._pattern_info: dict = {}
         if os.path.isfile(pattern_path):

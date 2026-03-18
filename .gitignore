@@ -30,6 +30,8 @@ Thumbs.db
 config/ur15_controllers.yaml
 config/vision_tracker.yaml
 config/calibration_pattern.json
+config/intrinsic_calibration_pattern.json
+config/tracking_pattern.json
 config/intrinsic_calibration_result.json
 
 # Temporary data (calibration images, results, etc.)
