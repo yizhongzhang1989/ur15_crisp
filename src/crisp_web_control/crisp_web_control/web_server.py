@@ -6,12 +6,14 @@ monitoring robot status, and commanding motion.
 
 import json
 import os
+import shutil
 import threading
 import time
 from collections import deque
 
 import numpy as np
 import rclpy
+import yaml
 from flask import Flask, Response, jsonify, request, send_from_directory
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped
@@ -20,6 +22,24 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from crisp_py.robot import make_robot
 from crisp_py.control.parameters_client import ParametersClient
+
+_CRISP_CONTROLLERS = ["gravity_compensation", "cartesian_impedance_controller", "joint_impedance_controller"]
+
+
+def _find_workspace_config():
+    """Find config/ur15_controllers.yaml in the workspace root."""
+    for candidate in [os.getcwd(), os.path.expanduser("~/Documents/ur15_crisp")]:
+        path = os.path.join(candidate, "config", "ur15_controllers.yaml")
+        if os.path.isdir(os.path.join(candidate, "config")):
+            return path
+    return None
+
+
+def _set_nested(d: dict, keys: list, value):
+    """Set a value in a nested dict from dotted key parts."""
+    for key in keys[:-1]:
+        d = d.setdefault(key, {})
+    d[keys[-1]] = value
 
 
 class WebControlServer:
@@ -327,6 +347,83 @@ class WebControlServer:
                 return jsonify({"success": True, "joint": self.robot.config.joint_names[idx], "new_value": round(float(current[idx]), 4)})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/save_config", methods=["POST"])
+        def save_config():
+            """Save current runtime parameters back into config/ur15_controllers.yaml,
+            preserving the file structure and only updating values."""
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            config_path = _find_workspace_config()
+            if not config_path or not os.path.isfile(config_path):
+                return jsonify({"error": "Config file not found. Launch once first to create it from template."}), 500
+            try:
+                with open(config_path, "r") as f:
+                    config = yaml.safe_load(f) or {}
+
+                changed = 0
+                for ctrl_name in _CRISP_CONTROLLERS:
+                    if ctrl_name not in config:
+                        continue
+                    ros_params = config[ctrl_name].get("ros__parameters", {})
+                    if not ros_params:
+                        continue
+                    try:
+                        client = self._get_param_client(ctrl_name)
+                        names = client.list_parameters()
+                        values = client.get_parameters(names)
+                        for n, v in zip(names, values):
+                            if n == "use_sim_time":
+                                continue
+                            # Walk the nested dict to update the value in-place
+                            keys = n.split(".")
+                            d = ros_params
+                            found = True
+                            for k in keys[:-1]:
+                                if isinstance(d, dict) and k in d:
+                                    d = d[k]
+                                else:
+                                    found = False
+                                    break
+                            if found and isinstance(d, dict) and keys[-1] in d:
+                                old = d[keys[-1]]
+                                # Preserve type: convert numpy/etc to native Python
+                                new_val = v
+                                if isinstance(v, (np.floating, np.integer)):
+                                    new_val = float(v) if isinstance(v, np.floating) else int(v)
+                                if old != new_val:
+                                    d[keys[-1]] = new_val
+                                    changed += 1
+                    except Exception:
+                        continue
+
+                with open(config_path, "w") as f:
+                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+                return jsonify({"success": True, "path": config_path, "changed": changed})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/reset_config", methods=["POST"])
+        def reset_config():
+            """Delete user config to revert to template defaults on next launch."""
+            config_path = _find_workspace_config()
+            if not config_path:
+                return jsonify({"error": "Cannot find workspace config/ directory"}), 500
+            try:
+                if os.path.isfile(config_path):
+                    os.remove(config_path)
+                    return jsonify({"success": True, "message": "Config deleted. Template will be used on next launch."})
+                else:
+                    return jsonify({"success": True, "message": "No user config exists."})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/config_status")
+        def config_status():
+            config_path = _find_workspace_config()
+            exists = config_path is not None and os.path.isfile(config_path)
+            return jsonify({"user_config_exists": exists, "path": config_path or ""})
 
         @app.route("/api/move_to", methods=["POST"])
         def move_to():

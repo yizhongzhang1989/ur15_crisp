@@ -121,7 +121,13 @@
       <select id="paramCtrlSelect" onchange="loadParams()" style="padding:4px 8px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;min-width:250px;">
         <option value="">-- select --</option><option value="gravity_compensation">gravity_compensation</option><option value="cartesian_impedance_controller">cartesian_impedance_controller</option><option value="joint_impedance_controller">joint_impedance_controller</option>
       </select><button class="btn-send" onclick="loadParams()" style="margin-left:4px;">Refresh</button>
-    </div><div id="paramsContainer" style="max-height:400px;overflow-y:auto;"></div><div class="log" id="paramLog"></div>
+    </div><div id="paramsContainer" style="max-height:400px;overflow-y:auto;"></div>
+    <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+      <button class="btn-send" onclick="saveConfig()" style="background:var(--green);">Save Config to Disk</button>
+      <button class="btn-copy" onclick="resetConfig()" style="background:var(--highlight);">Reset to Template</button>
+      <span id="configStatus" style="font-size:0.8em; color:var(--dim);"></span>
+    </div>
+    <div class="log" id="paramLog"></div>
   </div>
 
   <!-- Real-time Plot -->
@@ -321,7 +327,34 @@ function drawPlot() {
   requestAnimationFrame(drawPlot);
 }
 
-startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();drawPlot();
+// --- Config Save/Reset ---
+function saveConfig() {
+  const l = document.getElementById("paramLog");
+  l.innerHTML = '<div>Saving config...</div>';
+  fetch("/api/save_config", { method: "POST" }).then(r => r.json()).then(d => {
+    if (d.success) l.innerHTML = `<div class="ok">Saved to ${d.path} (${d.changed} values updated). Takes effect on next launch.</div>`;
+    else l.innerHTML = `<div class="err">${d.error}</div>`;
+    checkConfigStatus();
+  }).catch(e => { l.innerHTML = `<div class="err">${e}</div>`; });
+}
+function resetConfig() {
+  if (!confirm("Delete config and revert to template on next launch?")) return;
+  const l = document.getElementById("paramLog");
+  fetch("/api/reset_config", { method: "POST" }).then(r => r.json()).then(d => {
+    if (d.success) l.innerHTML = `<div class="ok">${d.message}</div>`;
+    else l.innerHTML = `<div class="err">${d.error}</div>`;
+    checkConfigStatus();
+  }).catch(e => { l.innerHTML = `<div class="err">${e}</div>`; });
+}
+function checkConfigStatus() {
+  fetch("/api/config_status").then(r => r.json()).then(d => {
+    const s = document.getElementById("configStatus");
+    s.textContent = d.user_config_exists ? "Custom config active" : "Using template defaults";
+    s.style.color = d.user_config_exists ? "var(--green)" : "var(--dim)";
+  }).catch(() => {});
+}
+
+startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();drawPlot();checkConfigStatus();
 </script>
 </body>
 </html>
