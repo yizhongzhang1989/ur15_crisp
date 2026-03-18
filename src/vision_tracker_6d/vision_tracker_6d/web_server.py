@@ -297,14 +297,32 @@ class VisionTrackerWebServer:
             out_dir = self._calib_results_dir()
             calibrator.generate_calibration_report(out_dir, verbose=True)
 
+            # Save compact result to config/
+            cam_mtx = result["camera_matrix"]
+            dist = result["distortion_coefficients"]
+            image_size = list(calibrator.image_size) if calibrator.image_size else [0, 0]
+            compact_result = {
+                "camera_matrix": cam_mtx.tolist(),
+                "distortion_coefficients": dist.tolist(),
+                "image_size": image_size,
+                "rms_error": float(result["rms_error"]),
+            }
+            result_path = os.path.join(
+                get_workspace_root(), "config", "intrinsic_calibration_result.json"
+            )
+            with open(result_path, "w") as f:
+                json.dump(compact_result, f, indent=2)
+
             self._calib_result = {
                 "rms_error": round(float(result["rms_error"]), 4),
-                "fx": round(float(result["camera_matrix"][0, 0]), 2),
-                "fy": round(float(result["camera_matrix"][1, 1]), 2),
-                "cx": round(float(result["camera_matrix"][0, 2]), 2),
-                "cy": round(float(result["camera_matrix"][1, 2]), 2),
-                "dist_coeffs": [round(float(c), 6) for c in result["distortion_coefficients"]],
+                "fx": round(float(cam_mtx[0, 0]), 2),
+                "fy": round(float(cam_mtx[1, 1]), 2),
+                "cx": round(float(cam_mtx[0, 2]), 2),
+                "cy": round(float(cam_mtx[1, 2]), 2),
+                "dist_coeffs": [round(float(c), 6) for c in dist],
+                "image_size": image_size,
                 "output_dir": out_dir,
+                "result_path": result_path,
             }
         except Exception as e:
             self._calib_error = str(e)
