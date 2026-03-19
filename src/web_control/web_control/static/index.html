@@ -7,7 +7,7 @@
 <style>
   :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --highlight: #e94560; --text: #eee; --dim: #888; --green: #4caf50; --orange: #ff9800; --blue: #2196f3; --bar-bg: #0d1525; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
   .monitor-bar { position: sticky; top: 0; z-index: 100; background: var(--bar-bg); border-bottom: 2px solid var(--accent); padding: 6px 12px; }
   .monitor-bar .bar-title { text-align: center; font-size: 1.1em; font-weight: bold; padding: 4px 0 6px; }
   .monitor-bar .bar-title span { color: var(--highlight); }
@@ -28,12 +28,12 @@
   .ft-compact { font-family: monospace; font-size: 1.0em; line-height: 1.6; }
   .ft-compact .label { color: var(--dim); }
   .ft-compact .mag { color: var(--orange); font-weight: bold; font-size: 1.1em; }
-  .content { padding: 12px; max-width: 1100px; margin: 0 auto; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .content { padding: 12px; overflow-x: hidden; }
+  .grid { display: grid; grid-template-columns: 480px 1fr; gap: 12px; }
   .card { background: var(--card); border-radius: 8px; padding: 16px; }
   .card h2 { font-size: 1em; color: var(--dim); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
   .ctrl-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
-  .ctrl-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: 4px; background: rgba(255,255,255,0.03); }
+  .ctrl-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: 4px; background: rgba(255,255,255,0.03); white-space: nowrap; }
   .ctrl-item .name { font-family: monospace; font-size: 0.9em; } .ctrl-item .badge { font-size: 0.75em; padding: 2px 8px; border-radius: 10px; }
   .badge.active { background: var(--green); color: #000; } .badge.inactive { background: var(--accent); color: var(--dim); }
   .ctrl-item button { font-size: 0.8em; padding: 4px 12px; border: 1px solid var(--accent); background: transparent; color: var(--text); border-radius: 4px; cursor: pointer; }
@@ -63,6 +63,14 @@
   .full-width { grid-column: 1 / -1; }
   .log { font-family: monospace; font-size: 0.8em; color: var(--dim); max-height: 60px; overflow-y: auto; margin-top: 8px; }
   .log .err { color: var(--highlight); } .log .ok { color: var(--green); }
+
+  /* Tabs */
+  .tab-bar { display: flex; gap: 0; margin-bottom: 0; }
+  .tab-btn { padding: 10px 24px; border: none; background: var(--accent); color: var(--dim); cursor: pointer; font-size: 0.95em; font-weight: bold; border-radius: 6px 6px 0 0; }
+  .tab-btn.active { background: var(--card); color: var(--text); }
+  .tab-btn:hover:not(.active) { background: #1a2a50; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
 </style>
 </head>
 <body>
@@ -93,30 +101,71 @@
     </div>
   </div>
 </div>
-<div class="content"><div class="grid">
-  <div class="card"><h2>Controllers</h2><div class="ctrl-list" id="ctrlList">Loading...</div><div class="log" id="ctrlLog"></div></div>
-  <div class="card"><h2>Cartesian Control</h2><div class="move-section">
-    <div class="step-row"><label>Step (m):</label><input type="number" id="stepSize" value="0.02" step="0.005" min="0.001" max="0.2"></div>
-    <div class="delta-grid">
-      <button class="btn-x" onclick="moveDelta(1,0,0)">+X</button><button class="btn-y" onclick="moveDelta(0,1,0)">+Y</button><button class="btn-z" onclick="moveDelta(0,0,1)">+Z</button>
-      <button class="btn-x" onclick="moveDelta(-1,0,0)">&minus;X</button><button class="btn-y" onclick="moveDelta(0,-1,0)">&minus;Y</button><button class="btn-z" onclick="moveDelta(0,0,-1)">&minus;Z</button>
+<div class="content">
+  <!-- Row 1: Controllers + Joint Plot side by side -->
+  <div class="grid">
+    <div class="card"><h2>Controllers</h2><div class="ctrl-list" id="ctrlList">Loading...</div><div class="log" id="ctrlLog"></div></div>
+    <div class="card">
+      <h2>Joint Plot</h2>
+      <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+        <div class="step-row"><label>Joint:</label>
+          <select id="plotJointSelect" style="width:150px; padding:4px 8px; background:var(--bg); border:1px solid var(--accent); color:var(--text); border-radius:4px; font-family:monospace;">
+            <option value="0">shoulder_pan</option><option value="1">shoulder_lift</option><option value="2">elbow</option>
+            <option value="3">wrist_1</option><option value="4">wrist_2</option><option value="5">wrist_3</option>
+          </select>
+        </div>
+        <div class="step-row"><label>Window (s):</label><input type="number" id="plotWindow" value="10" step="1" min="2" max="60" style="width:60px;"></div>
+        <button id="plotFreezeBtn" class="btn-send" onclick="toggleFreeze()" style="padding:6px 16px;">Freeze</button>
+        <button class="btn-copy" onclick="clearPlot()" style="padding:6px 16px;">Clear</button>
+      </div>
+      <div style="display:flex; gap:12px; font-size:0.8em; font-family:monospace; margin-bottom:4px;">
+        <span style="color:#4caf50;">&block; Position (deg)</span>
+        <span style="color:#2196f3;">&block; Target (deg)</span>
+        <span style="color:#ff9800;">&block; Current (A)</span>
+        <span style="color:#e94560;">&block; Cmd Torque (Nm)</span>
+      </div>
+      <canvas id="plotCanvas" width="1060" height="280" style="width:100%; background:#0a0f1a; border-radius:6px; border:1px solid var(--accent);"></canvas>
     </div>
-    <hr style="border-color:var(--accent);margin:4px 0;"><h2>Send Target Pose</h2>
-    <div class="target-form">
-      <label>X:</label><input type="number" id="tx" step="0.01"><label>Y:</label><input type="number" id="ty" step="0.01"><label>Z:</label><input type="number" id="tz" step="0.01">
-      <label>qx:</label><input type="number" id="tqx" step="0.01"><label>qy:</label><input type="number" id="tqy" step="0.01"><label>qz:</label><input type="number" id="tqz" step="0.01"><label>qw:</label><input type="number" id="tqw" step="0.01">
-      <div class="btn-row" style="grid-column:1/-1;"><button class="btn-copy" onclick="copyCurrentPose()">Copy Current</button><button class="btn-send" onclick="sendTarget()">Send Target</button></div>
-    </div><div class="log" id="moveLog"></div>
-  </div></div>
-  <div class="card"><h2>Joint Control</h2><div class="move-section">
-    <div class="step-row"><label>Step (deg):</label><input type="number" id="jointStepSize" value="5" step="1" min="0.5" max="30"></div>
-    <div id="jointControlGrid" style="display:flex;flex-direction:column;gap:6px;font-family:monospace;font-size:0.9em;"></div>
-    <hr style="border-color:var(--accent);margin:8px 0;"><h2>Send Target Joints</h2>
-    <div id="jointTargetForm" style="display:grid;grid-template-columns:auto 1fr auto auto;gap:4px 8px;align-items:center;font-size:0.9em;"></div>
-    <div class="btn-row" style="margin-top:8px;"><button class="btn-copy" onclick="copyCurrentJoints()">Copy Current</button><button class="btn-send" onclick="sendTargetJoints()">Send Target</button></div>
-    <div class="log" id="jointLog"></div>
-  </div></div>
-  <div class="card full-width"><h2>Controller Parameters</h2>
+  </div>
+
+  <!-- Row 2: Tabbed Cartesian / Joint Control -->
+  <div style="margin-top:12px;">
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('cartesian')">Cartesian Control</button>
+      <button class="tab-btn" onclick="switchTab('joint')">Joint Control</button>
+    </div>
+    <div class="card" style="border-radius:0 6px 6px 6px;">
+      <div id="tab-cartesian" class="tab-content active">
+        <div class="move-section">
+          <div class="step-row"><label>Step (m):</label><input type="number" id="stepSize" value="0.02" step="0.005" min="0.001" max="0.2"></div>
+          <div class="delta-grid">
+            <button class="btn-x" onclick="moveDelta(1,0,0)">+X</button><button class="btn-y" onclick="moveDelta(0,1,0)">+Y</button><button class="btn-z" onclick="moveDelta(0,0,1)">+Z</button>
+            <button class="btn-x" onclick="moveDelta(-1,0,0)">&minus;X</button><button class="btn-y" onclick="moveDelta(0,-1,0)">&minus;Y</button><button class="btn-z" onclick="moveDelta(0,0,-1)">&minus;Z</button>
+          </div>
+          <hr style="border-color:var(--accent);margin:4px 0;"><h2>Send Target Pose</h2>
+          <div class="target-form">
+            <label>X:</label><input type="number" id="tx" step="0.01"><label>Y:</label><input type="number" id="ty" step="0.01"><label>Z:</label><input type="number" id="tz" step="0.01">
+            <label>qx:</label><input type="number" id="tqx" step="0.01"><label>qy:</label><input type="number" id="tqy" step="0.01"><label>qz:</label><input type="number" id="tqz" step="0.01"><label>qw:</label><input type="number" id="tqw" step="0.01">
+            <div class="btn-row" style="grid-column:1/-1;"><button class="btn-copy" onclick="copyCurrentPose()">Copy Current</button><button class="btn-send" onclick="sendTarget()">Send Target</button></div>
+          </div><div class="log" id="moveLog"></div>
+        </div>
+      </div>
+      <div id="tab-joint" class="tab-content">
+        <div class="move-section">
+          <div class="step-row"><label>Step (deg):</label><input type="number" id="jointStepSize" value="5" step="1" min="0.5" max="30"></div>
+          <div id="jointControlGrid" style="display:flex;flex-direction:column;gap:6px;font-family:monospace;font-size:0.9em;"></div>
+          <hr style="border-color:var(--accent);margin:8px 0;"><h2>Send Target Joints</h2>
+          <div id="jointTargetForm" style="display:grid;grid-template-columns:auto 1fr auto auto;gap:4px 8px;align-items:center;font-size:0.9em;"></div>
+          <div class="btn-row" style="margin-top:8px;"><button class="btn-copy" onclick="copyCurrentJoints()">Copy Current</button><button class="btn-send" onclick="sendTargetJoints()">Send Target</button></div>
+          <div class="log" id="jointLog"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 3: Parameters -->
+  <div class="card" style="margin-top:12px;">
+    <h2>Controller Parameters</h2>
     <div class="step-row" style="margin-bottom:10px;"><label>Controller:</label>
       <select id="paramCtrlSelect" onchange="loadParams()" style="padding:4px 8px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;min-width:250px;">
         <option value="">-- select --</option><option value="gravity_compensation">gravity_compensation</option><option value="cartesian_impedance_controller">cartesian_impedance_controller</option><option value="joint_impedance_controller">joint_impedance_controller</option>
@@ -129,31 +178,7 @@
     </div>
     <div class="log" id="paramLog"></div>
   </div>
-
-  <!-- Real-time Plot -->
-  <div class="card full-width">
-    <h2>Joint Plot</h2>
-    <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
-      <div class="step-row"><label>Joint:</label>
-        <select id="plotJointSelect" style="width:150px; padding:4px 8px; background:var(--bg); border:1px solid var(--accent); color:var(--text); border-radius:4px; font-family:monospace;">
-          <option value="0">shoulder_pan</option><option value="1">shoulder_lift</option><option value="2">elbow</option>
-          <option value="3">wrist_1</option><option value="4">wrist_2</option><option value="5">wrist_3</option>
-        </select>
-      </div>
-      <div class="step-row"><label>Window (s):</label><input type="number" id="plotWindow" value="10" step="1" min="2" max="60" style="width:60px;"></div>
-      <button id="plotFreezeBtn" class="btn-send" onclick="toggleFreeze()" style="padding:6px 16px;">Freeze</button>
-      <button class="btn-copy" onclick="clearPlot()" style="padding:6px 16px;">Clear</button>
-      <div style="display:flex; gap:12px; font-size:0.8em; font-family:monospace;">
-        <span style="color:#4caf50;">&block; Position (deg)</span>
-        <span style="color:#2196f3;">&block; Target (deg)</span>
-        <span style="color:#ff9800;">&block; Current (A)</span>
-        <span style="color:#e94560;">&block; Cmd Torque (Nm)</span>
-      </div>
-    </div>
-    <canvas id="plotCanvas" width="1060" height="280" style="width:100%; background:#0a0f1a; border-radius:6px; border:1px solid var(--accent);"></canvas>
-  </div>
-
-</div></div>
+</div>
 <script>
 const JN=["shoulder_pan","shoulder_lift","elbow","wrist_1","wrist_2","wrist_3"];
 let latestPose=null, latestJoints=null;
@@ -352,6 +377,14 @@ function checkConfigStatus() {
     s.textContent = d.user_config_exists ? "Custom config active" : "Using template defaults";
     s.style.color = d.user_config_exists ? "var(--green)" : "var(--dim)";
   }).catch(() => {});
+}
+
+// --- Tab Switching ---
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  event.target.classList.add('active');
 }
 
 startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();drawPlot();checkConfigStatus();
