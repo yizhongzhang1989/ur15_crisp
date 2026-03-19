@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vision Tracker 6D</title>
+<style>
+  :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --highlight: #e94560; --text: #eee; --dim: #888; --green: #4caf50; --orange: #ff9800; --blue: #2196f3; --bar-bg: #0d1525; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Header bar */
+  .header { background: var(--bar-bg); border-bottom: 2px solid var(--accent); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .header .title { font-size: 1.2em; font-weight: bold; }
+  .header .title span { color: var(--highlight); }
+  .header .status-bar { display: flex; align-items: center; gap: 16px; font-size: 0.9em; }
+  .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; }
+  .status-dot.ok { background: var(--green); }
+  .status-dot.off { background: var(--highlight); }
+  .status-dot.warn { background: var(--orange); }
+  .status-dot.wait { background: var(--dim); }
+
+  /* Layout */
+  .content { padding: 16px; max-width: 1200px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: 1fr 340px; gap: 16px; }
+  .card { background: var(--card); border-radius: 8px; padding: 16px; }
+  .card h2 { font-size: 0.95em; color: var(--dim); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+
+  /* Video panel */
+  .video-container { position: relative; background: #000; border-radius: 6px; overflow: hidden; width: 100%; }
+  .video-container img { width: 100%; display: block; }
+  .video-label { position: absolute; top: 8px; left: 12px; background: rgba(0,0,0,0.65); padding: 2px 10px; border-radius: 4px; font-size: 0.8em; color: var(--text); }
+  .video-placeholder { width: 100%; aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; background: #111; color: var(--dim); font-size: 0.95em; border-radius: 6px; }
+  .camera-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .camera-tabs button { padding: 6px 16px; border: 1px solid var(--accent); background: transparent; color: var(--text); border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+  .camera-tabs button.active { background: var(--blue); border-color: var(--blue); }
+  .camera-tabs button:hover { background: var(--accent); }
+
+  /* Pose display */
+  .pose-display { font-family: monospace; font-size: 1.05em; line-height: 1.8; }
+  .pose-display .label { color: var(--dim); display: inline-block; width: 30px; }
+  .pose-display .val { color: var(--green); }
+  .pose-display .val.no-det { color: var(--dim); }
+  .pose-section { margin-bottom: 6px; }
+  .pose-section-title { font-size: 0.8em; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+
+  /* Controls */
+  .btn { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em; color: #fff; font-weight: 600; transition: filter 0.15s; }
+  .btn:hover { filter: brightness(1.15); }
+  .btn:active { filter: brightness(0.85); }
+  .btn-green { background: var(--green); }
+  .btn-red { background: var(--highlight); }
+  .btn-blue { background: var(--blue); }
+  .btn-orange { background: var(--orange); color: #000; }
+  .btn:disabled { opacity: 0.4; cursor: default; filter: none; }
+
+  .control-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .tracking-status { font-size: 0.9em; }
+
+  /* Chessboard config form */
+  .form-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 0.9em; align-items: center; }
+  .form-grid label { color: var(--dim); text-align: right; font-size: 0.85em; }
+  .form-grid input { padding: 5px 8px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 4px; font-family: monospace; font-size: 0.9em; width: 100%; }
+  .form-grid input:focus { border-color: var(--blue); outline: none; }
+
+  /* Info items */
+  .info-list { font-size: 0.85em; line-height: 1.8; }
+  .info-list .label { color: var(--dim); }
+  .info-list .val { color: var(--text); font-family: monospace; }
+  .info-list .val.ok { color: var(--green); }
+  .info-list .val.err { color: var(--highlight); }
+
+  /* Camera status pills */
+  .cam-status-list { display: flex; flex-direction: column; gap: 6px; }
+  .cam-pill { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(255,255,255,0.03); border-radius: 4px; font-size: 0.85em; }
+  .cam-pill .cam-name { font-family: monospace; }
+  .cam-pill .badges { display: flex; gap: 6px; }
+  .badge { font-size: 0.75em; padding: 2px 8px; border-radius: 10px; }
+  .badge.open { background: var(--green); color: #000; }
+  .badge.closed { background: var(--highlight); color: #fff; }
+  .badge.cal { background: var(--blue); color: #fff; }
+  .badge.nocal { background: var(--accent); color: var(--dim); }
+
+  /* Separator */
+  .sep { border: 0; border-top: 1px solid var(--accent); margin: 14px 0; }
+
+  /* Log */
+  .log { font-family: monospace; font-size: 0.8em; color: var(--dim); max-height: 80px; overflow-y: auto; margin-top: 8px; padding: 6px; background: rgba(0,0,0,0.2); border-radius: 4px; }
+  .log .ok { color: var(--green); }
+  .log .err { color: var(--highlight); }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ HEADER -->
+<div class="header">
+  <div class="title"><span>Vision Tracker</span> 6D</div>
+  <div class="status-bar">
+    <span><span class="status-dot wait" id="connDot"></span><span id="connText">Connecting…</span></span>
+    <span>FPS: <strong id="fpsVal">—</strong></span>
+    <span>Detection: <span class="status-dot wait" id="detDot"></span><span id="detText">—</span></span>
+    <span>Intrinsic: <span class="status-dot wait" id="intDot"></span></span>
+  </div>
+</div>
+
+<!-- ============================================================ CONTENT -->
+<div class="content">
+<div class="grid">
+
+  <!-- LEFT: Video feeds -->
+  <div>
+    <div class="card">
+      <h2>Camera Feed</h2>
+      <div class="camera-tabs" id="cameraTabs"></div>
+      <div class="video-container" id="videoBox">
+        <div class="video-placeholder" id="videoPlaceholder">Waiting for camera…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Controls & Info -->
+  <div style="display:flex;flex-direction:column;gap:16px;">
+
+    <!-- Tracking control -->
+    <div class="card">
+      <h2>Tracking Control</h2>
+      <div class="control-row">
+        <button class="btn btn-green" id="btnStart" onclick="setTracking(true)">Start</button>
+        <button class="btn btn-red" id="btnStop" onclick="setTracking(false)">Stop</button>
+        <span class="tracking-status" id="trackingStatus">—</span>
+      </div>
+    </div>
+
+    <!-- 6D Pose -->
+    <div class="card">
+      <h2>Detected 6D Pose</h2>
+      <div class="pose-display">
+        <div class="pose-section">
+          <div class="pose-section-title">Position (m)</div>
+          <span class="label">X:</span> <span class="val no-det" id="posX">—</span><br>
+          <span class="label">Y:</span> <span class="val no-det" id="posY">—</span><br>
+          <span class="label">Z:</span> <span class="val no-det" id="posZ">—</span>
+        </div>
+        <div class="pose-section" style="margin-top:8px;">
+          <div class="pose-section-title">Orientation (quaternion xyzw)</div>
+          <span class="label">qx:</span> <span class="val no-det" id="oriQx">—</span><br>
+          <span class="label">qy:</span> <span class="val no-det" id="oriQy">—</span><br>
+          <span class="label">qz:</span> <span class="val no-det" id="oriQz">—</span><br>
+          <span class="label">qw:</span> <span class="val no-det" id="oriQw">—</span>
+        </div>
+        <div style="margin-top:6px;font-size:0.8em;color:var(--dim);">
+          Camera: <span id="poseCam">—</span> &nbsp; Reproj err: <span id="poseErr">—</span> px
+        </div>
+      </div>
+    </div>
+
+    <!-- Tracking Pattern (read-only) -->
+    <div class="card">
+      <h2>Tracking Pattern</h2>
+      <div class="info-list" style="font-family:monospace;font-size:0.85em;">
+        <div><span class="label">Type: </span><span class="val" id="trkPatType">—</span></div>
+        <div><span class="label">Size: </span><span class="val" id="trkPatSize">—</span></div>
+        <div><span class="label">Square: </span><span class="val" id="trkPatSqSize">—</span></div>
+        <div id="trkPatExtraInfo"></div>
+      </div>
+      <div style="margin-top:6px;font-size:0.75em;color:var(--dim);">Edit config/tracking_pattern.json to change</div>
+    </div>
+
+    <!-- Camera status -->
+    <div class="card">
+      <h2>Cameras</h2>
+      <div class="cam-status-list" id="camStatusList">
+        <span style="color:var(--dim);font-size:0.85em;">Loading…</span>
+      </div>
+    </div>
+
+    <!-- Intrinsic Calibration -->
+    <div class="card">
+      <h2>Intrinsic Calibration</h2>
+
+      <!-- Calibration pattern info (read-only) -->
+      <div style="margin-bottom:10px;">
+        <div style="font-size:0.8em;color:var(--dim);margin-bottom:4px;">CALIBRATION PATTERN</div>
+        <div class="info-list" style="font-family:monospace;font-size:0.85em;">
+          <div><span class="label">Type: </span><span class="val" id="calPatType">—</span></div>
+          <div><span class="label">Size: </span><span class="val" id="calPatSize">—</span></div>
+          <div><span class="label">Square: </span><span class="val" id="calPatSqSize">—</span></div>
+          <div id="calPatExtraInfo"></div>
+        </div>
+        <div style="font-size:0.7em;color:var(--dim);">Edit config/intrinsic_calibration_pattern.json to change</div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- Capture & calibrate -->
+      <div style="font-size:0.8em;color:var(--dim);margin-bottom:6px;">IMAGE CAPTURE</div>
+      <div class="control-row">
+        <button class="btn btn-orange" onclick="captureCalibImage()" id="btnCapture">Capture Image</button>
+        <span style="font-size:0.9em;">Images: <strong id="calibCount">0</strong></span>
+      </div>
+      <div class="control-row">
+        <button class="btn btn-green" onclick="runCalibration()" id="btnCalibrate">Calibrate</button>
+        <button class="btn btn-red" onclick="deleteCalibImages()" style="font-size:0.8em;padding:5px 12px;">Clear Images</button>
+        <span id="calibStatus" style="font-size:0.85em;color:var(--dim);"></span>
+      </div>
+
+      <!-- Result -->
+      <div id="calibResult" style="display:none;margin-top:10px;padding:10px;background:rgba(0,0,0,0.2);border-radius:4px;">
+        <div style="font-size:0.8em;color:var(--dim);margin-bottom:4px;">CALIBRATION RESULT</div>
+        <div class="info-list" style="font-family:monospace;font-size:0.85em;">
+          <div>RMS Error: <span class="val ok" id="calRms">—</span> px</div>
+          <div>fx: <span class="val" id="calFx">—</span> &nbsp; fy: <span class="val" id="calFy">—</span></div>
+          <div>cx: <span class="val" id="calCx">—</span> &nbsp; cy: <span class="val" id="calCy">—</span></div>
+          <div>Distortion: <span class="val" id="calDist" style="font-size:0.8em;word-break:break-all;">—</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="card">
+      <h2>Log</h2>
+      <div class="log" id="logBox"></div>
+    </div>
+
+  </div>
+</div>
+</div>
+
+<!-- ============================================================ JS -->
+<script>
+(function() {
+  // State
+  let cameras = [];
+  let activeCamera = null;
+  let sseConnected = false;
+
+  // DOM refs
+  const connDot = document.getElementById('connDot');
+  const connText = document.getElementById('connText');
+  const detDot = document.getElementById('detDot');
+  const detText = document.getElementById('detText');
+  const fpsVal = document.getElementById('fpsVal');
+  const cameraTabs = document.getElementById('cameraTabs');
+  const videoBox = document.getElementById('videoBox');
+  const videoPlaceholder = document.getElementById('videoPlaceholder');
+  const trackingStatus = document.getElementById('trackingStatus');
+  const btnStart = document.getElementById('btnStart');
+  const btnStop = document.getElementById('btnStop');
+  const logBox = document.getElementById('logBox');
+
+  // --- SSE connection ------------------------------------------------
+  function connectSSE() {
+    const es = new EventSource('/api/stream');
+    es.onopen = function() {
+      sseConnected = true;
+      connDot.className = 'status-dot ok';
+      connText.textContent = 'Connected';
+      log('SSE connected', 'ok');
+    };
+    es.onmessage = function(e) {
+      try {
+        const d = JSON.parse(e.data);
+        updateUI(d);
+      } catch(err) {}
+    };
+    es.onerror = function() {
+      sseConnected = false;
+      connDot.className = 'status-dot off';
+      connText.textContent = 'Disconnected';
+      es.close();
+      setTimeout(connectSSE, 2000);
+    };
+  }
+
+  // --- Update UI from SSE data ---------------------------------------
+  function updateUI(d) {
+    // FPS
+    fpsVal.textContent = d.fps != null ? d.fps : '—';
+
+    // Intrinsic calibration status
+    var intDot = document.getElementById('intDot');
+    if (d.has_detector) {
+      intDot.className = 'status-dot ok';
+    } else if (d.has_intrinsic) {
+      intDot.className = 'status-dot warn';
+    } else {
+      intDot.className = 'status-dot off';
+    }
+
+    // Detection status
+    if (d.detection_active) {
+      detDot.className = 'status-dot ok';
+      detText.textContent = 'Active';
+    } else {
+      detDot.className = 'status-dot off';
+      detText.textContent = 'None';
+    }
+
+    // Tracking enabled
+    if (d.tracking_enabled) {
+      trackingStatus.textContent = 'Tracking ON';
+      trackingStatus.style.color = 'var(--green)';
+      btnStart.disabled = true;
+      btnStop.disabled = false;
+    } else {
+      trackingStatus.textContent = 'Tracking OFF';
+      trackingStatus.style.color = 'var(--highlight)';
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+    }
+
+    // Cameras — build tabs on first data
+    if (d.cameras) {
+      const names = Object.keys(d.cameras);
+      if (JSON.stringify(names) !== JSON.stringify(cameras)) {
+        cameras = names;
+        buildCameraTabs();
+        buildCameraStatus(d.cameras);
+        if (!activeCamera && cameras.length > 0) {
+          selectCamera(cameras[0]);
+        }
+      }
+      buildCameraStatus(d.cameras);
+    }
+
+    // Pose
+    const p = d.pose;
+    const vals = ['posX','posY','posZ','oriQx','oriQy','oriQz','oriQw'];
+    const keys = ['x','y','z','qx','qy','qz','qw'];
+    if (p) {
+      for (let i = 0; i < vals.length; i++) {
+        const el = document.getElementById(vals[i]);
+        el.textContent = p[keys[i]];
+        el.className = 'val';
+      }
+      document.getElementById('poseCam').textContent = p.camera || '—';
+      document.getElementById('poseErr').textContent = p.reproj_error != null ? p.reproj_error : '—';
+    } else {
+      for (let i = 0; i < vals.length; i++) {
+        const el = document.getElementById(vals[i]);
+        el.textContent = '—';
+        el.className = 'val no-det';
+      }
+      document.getElementById('poseCam').textContent = '—';
+      document.getElementById('poseErr').textContent = '—';
+    }
+
+    // Calibration image count
+    if (d.calib_image_count != null) {
+      document.getElementById('calibCount').textContent = d.calib_image_count;
+    }
+
+    // Tracking pattern info (read-only display from SSE)
+    if (d.pattern && !window._trkPatLoaded) {
+      var pat = d.pattern;
+      var params = pat.parameters || {};
+      var typeNames = {standard_chessboard:'Standard Chessboard', charuco_board:'ChArUco Board', grid_board:'Grid Board'};
+      document.getElementById('trkPatType').textContent = typeNames[pat.pattern_id] || pat.pattern_id || '—';
+      document.getElementById('trkPatSize').textContent = (params.width || '?') + ' × ' + (params.height || '?');
+      document.getElementById('trkPatSqSize').textContent = (params.square_size || '?') + ' m';
+      var extra = document.getElementById('trkPatExtraInfo');
+      extra.innerHTML = '';
+      if (params.marker_size) extra.innerHTML += '<div><span class="label">Marker: </span><span class="val">' + params.marker_size + ' m</span></div>';
+      if (params.dictionary_id != null) extra.innerHTML += '<div><span class="label">Dict ID: </span><span class="val">' + params.dictionary_id + '</span></div>';
+      window._trkPatLoaded = true;
+    }
+  }
+
+  // --- Camera tabs ---------------------------------------------------
+  function buildCameraTabs() {
+    cameraTabs.innerHTML = '';
+    cameras.forEach(function(name) {
+      const btn = document.createElement('button');
+      btn.textContent = name;
+      btn.onclick = function() { selectCamera(name); };
+      if (name === activeCamera) btn.classList.add('active');
+      cameraTabs.appendChild(btn);
+    });
+  }
+
+  function selectCamera(name) {
+    activeCamera = name;
+    // Update tab active state
+    Array.from(cameraTabs.children).forEach(function(btn) {
+      btn.classList.toggle('active', btn.textContent === name);
+    });
+    // Set video source
+    videoBox.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = '/api/video_feed/' + encodeURIComponent(name);
+    img.alt = name;
+    img.onerror = function() {
+      videoBox.innerHTML = '<div class="video-placeholder">Camera stream unavailable</div>';
+    };
+    const label = document.createElement('div');
+    label.className = 'video-label';
+    label.textContent = name;
+    videoBox.appendChild(img);
+    videoBox.appendChild(label);
+  }
+
+  // --- Camera status list --------------------------------------------
+  function buildCameraStatus(camsObj) {
+    const list = document.getElementById('camStatusList');
+    list.innerHTML = '';
+    Object.keys(camsObj).forEach(function(name) {
+      const c = camsObj[name];
+      const pill = document.createElement('div');
+      pill.className = 'cam-pill';
+      pill.innerHTML =
+        '<span class="cam-name">' + name + '</span>' +
+        '<span class="badges">' +
+          '<span class="badge ' + (c.receiving ? 'open' : 'closed') + '">' + (c.receiving ? 'Receiving' : 'No data') + '</span>' +
+        '</span>';
+      list.appendChild(pill);
+    });
+  }
+
+  // --- Log -----------------------------------------------------------
+  function log(msg, cls) {
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+    // Keep last 50 lines
+    while (logBox.children.length > 50) logBox.removeChild(logBox.firstChild);
+  }
+
+  // --- API calls -----------------------------------------------------
+  window.setTracking = function(enabled) {
+    fetch('/api/tracking', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: enabled})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      log('Tracking ' + (d.tracking_enabled ? 'started' : 'stopped'), d.tracking_enabled ? 'ok' : 'err');
+    }).catch(function(err) {
+      log('Error: ' + err, 'err');
+    });
+  };
+
+  // --- Init ----------------------------------------------------------
+  connectSSE();
+  loadCalibPattern();
+  log('UI loaded');
+
+  // --- Load intrinsic calibration pattern (once at init) -------------
+  function loadCalibPattern() {
+    fetch('/api/calib/pattern').then(function(r) {
+      if (!r.ok) return null;
+      return r.json();
+    }).then(function(d) {
+      if (!d || d.error) return;
+      var params = d.parameters || {};
+      var typeNames = {standard_chessboard:'Standard Chessboard', charuco_board:'ChArUco Board', grid_board:'Grid Board'};
+      document.getElementById('calPatType').textContent = typeNames[d.pattern_id] || d.pattern_id || '—';
+      document.getElementById('calPatSize').textContent = (params.width || '?') + ' × ' + (params.height || '?');
+      document.getElementById('calPatSqSize').textContent = (params.square_size || '?') + ' m';
+      var extra = document.getElementById('calPatExtraInfo');
+      extra.innerHTML = '';
+      if (params.marker_size) extra.innerHTML += '<div><span class="label">Marker: </span><span class="val">' + params.marker_size + ' m</span></div>';
+      if (params.dictionary_id != null) extra.innerHTML += '<div><span class="label">Dict ID: </span><span class="val">' + params.dictionary_id + '</span></div>';
+    });
+  }
+
+  // --- Calibration ---------------------------------------------------
+  window.captureCalibImage = function() {
+    document.getElementById('btnCapture').disabled = true;
+    fetch('/api/calib/capture', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({camera: activeCamera})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.error) { log('Capture error: ' + d.error, 'err'); return; }
+      document.getElementById('calibCount').textContent = d.count;
+      log('Captured ' + d.saved + ' (total: ' + d.count + ')', 'ok');
+    }).catch(function(err) {
+      log('Capture error: ' + err, 'err');
+    }).finally(function() {
+      document.getElementById('btnCapture').disabled = false;
+    });
+  };
+
+  window.deleteCalibImages = function() {
+    if (!confirm('Delete all captured calibration images?')) return;
+    fetch('/api/calib/images/delete', { method: 'POST' })
+    .then(function(r) { return r.json(); }).then(function(d) {
+      document.getElementById('calibCount').textContent = 0;
+      log('Calibration images cleared', 'ok');
+    });
+  };
+
+  window.runCalibration = function() {
+    document.getElementById('btnCalibrate').disabled = true;
+    document.getElementById('calibStatus').textContent = 'Running…';
+    document.getElementById('calibStatus').style.color = 'var(--orange)';
+    fetch('/api/calib/run', { method: 'POST' })
+    .then(function(r) { return r.json(); }).then(function(d) {
+      if (d.error) {
+        log('Calibration error: ' + d.error, 'err');
+        document.getElementById('calibStatus').textContent = d.error;
+        document.getElementById('calibStatus').style.color = 'var(--highlight)';
+        document.getElementById('btnCalibrate').disabled = false;
+        return;
+      }
+      log('Calibration started with ' + d.image_count + ' images…', 'ok');
+      pollCalibStatus();
+    }).catch(function(err) {
+      log('Error: ' + err, 'err');
+      document.getElementById('btnCalibrate').disabled = false;
+      document.getElementById('calibStatus').textContent = '';
+    });
+  };
+
+  function pollCalibStatus() {
+    fetch('/api/calib/status').then(function(r) { return r.json(); }).then(function(d) {
+      if (d.running) {
+        setTimeout(pollCalibStatus, 1000);
+        return;
+      }
+      document.getElementById('btnCalibrate').disabled = false;
+      if (d.error) {
+        document.getElementById('calibStatus').textContent = d.error;
+        document.getElementById('calibStatus').style.color = 'var(--highlight)';
+        log('Calibration failed: ' + d.error, 'err');
+      } else if (d.result) {
+        document.getElementById('calibStatus').textContent = 'Done! RMS=' + d.result.rms_error + 'px';
+        document.getElementById('calibStatus').style.color = 'var(--green)';
+        showCalibResult(d.result);
+        log('Calibration complete: RMS=' + d.result.rms_error + 'px', 'ok');
+      }
+    });
+  }
+
+  function showCalibResult(r) {
+    document.getElementById('calibResult').style.display = 'block';
+    document.getElementById('calRms').textContent = r.rms_error;
+    document.getElementById('calFx').textContent = r.fx;
+    document.getElementById('calFy').textContent = r.fy;
+    document.getElementById('calCx').textContent = r.cx;
+    document.getElementById('calCy').textContent = r.cy;
+    document.getElementById('calDist').textContent = r.dist_coeffs.join(', ');
+  }
+
+})();
+</script>
+</body>
+</html>

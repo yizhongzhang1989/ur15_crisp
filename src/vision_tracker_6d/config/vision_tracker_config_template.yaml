@@ -1,0 +1,57 @@
+# Vision Tracker 6D Configuration
+# ================================
+# This file configures the 6D chessboard pose tracker.
+# Copy to <workspace>/config/vision_tracker.yaml and edit as needed.
+# Calibration pattern: config/intrinsic_calibration_pattern.json
+# Tracking pattern:    config/tracking_pattern.json
+
+# --- Cameras ---
+# Each camera entry defines:
+#   name:             unique identifier for this camera
+#   image_topic:      ROS topic carrying sensor_msgs/Image (published by an external camera node)
+#   video_device:     (optional) V4L2 device path for usb_cam node launched by vision_tracker.launch.py
+#   framerate:        (optional) capture framerate for usb_cam (default 30)
+#   image_width:      (optional) capture width for usb_cam  (default 1280)
+#   image_height:     (optional) capture height for usb_cam (default 720)
+#   enabled:          whether to use this camera
+# Intrinsic calibration is loaded from config/intrinsic_calibration_result.json
+cameras:
+  - name: cam0
+    image_topic: /cam0/image_raw
+    video_device: /dev/video0
+    framerate: 30
+    image_width: 1280
+    image_height: 720
+    enabled: true
+  # - name: cam1
+  #   image_topic: /cam1/image_raw
+  #   video_device: /dev/video2
+  #   enabled: true
+
+# --- Tracking ---
+tracking:
+  rate_hz: 30.0                # Detection loop rate (Hz)
+  use_subpix: true             # Use cornerSubPix for higher accuracy
+  adaptive_threshold: true     # Use adaptive threshold in findChessboardCorners
+  normalize_image: true        # Normalize image before detection
+  fast_check: true             # Use fast check to quickly reject non-chessboard images
+
+# --- Pose Filtering ---
+filter:
+  enabled: true
+  method: ema                  # "ema" (exponential moving average) or "none"
+  alpha: 0.5                   # EMA smoothing factor (0..1, lower = smoother)
+
+# --- Multi-Camera Fusion ---
+fusion:
+  method: best_reprojection    # "best_reprojection" or "average"
+
+# --- ROS Topics ---
+topics:
+  pose_output: /vision_tracker/chessboard_pose        # geometry_msgs/PoseStamped
+  detection_status: /vision_tracker/detection_active   # std_msgs/Bool
+
+# --- Web Server ---
+web:
+  enabled: true
+  port: 8090
