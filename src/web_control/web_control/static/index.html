@@ -172,7 +172,7 @@
         <div id="jointSliderContainer"></div>
         <div class="btn-row" style="margin-top:8px;">
           <button class="btn-copy" onclick="copyCurrentJointsToSliders()">Snap Target to Current</button>
-          <button class="btn-send" onclick="sendJointSliders()">Send Target</button>
+          <button id="btnJointSend" class="btn-send" onclick="toggleJointSending()" style="padding:8px 20px;">Start Sending</button>
         </div>
         <div class="log" id="jointLog"></div>
       </div>
@@ -289,11 +289,27 @@ function copyCurrentJointsToSliders() {
   sendJointSliders();
 }
 function sendJointSliders() {
+  if (!jointSendingActive) return;
   const joints = jointSliderTargets.map(d => d * Math.PI / 180);
   fetch("/api/set_target_joint", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({joints}) })
     .then(r => r.json()).then(d => {
       if (!d.success) document.getElementById("jointLog").innerHTML = `<div class="err">${d.error}</div>`;
     }).catch(e => { document.getElementById("jointLog").innerHTML = `<div class="err">${e}</div>`; });
+}
+
+function toggleJointSending() {
+  jointSendingActive = !jointSendingActive;
+  const btn = document.getElementById("btnJointSend");
+  if (jointSendingActive) {
+    btn.textContent = "Stop Sending";
+    btn.style.background = "var(--orange)";
+    document.getElementById("jointLog").innerHTML = '<div class="ok">Sending target joints...</div>';
+    sendJointSliders();
+  } else {
+    btn.textContent = "Start Sending";
+    btn.style.background = "var(--blue)";
+    document.getElementById("jointLog").innerHTML = '<div>Sending stopped</div>';
+  }
 }
 const KEY_PARAMS={'Task Stiffness':['task.k_pos_x','task.k_pos_y','task.k_pos_z','task.k_rot_x','task.k_rot_y','task.k_rot_z'],'Task Damping':['task.d_pos_x','task.d_pos_y','task.d_pos_z','task.d_rot_x','task.d_rot_y','task.d_rot_z'],'Nullspace':['nullspace.stiffness','nullspace.damping','nullspace.max_tau'],'Filters':['filter.q','filter.dq','filter.output_torque','filter.target_pose'],'Safety':['max_delta_tau','limit_torques','limit_error','stop_commands']};
 let currentParams={};
@@ -492,6 +508,7 @@ function switchTab(tab) {
 
 // --- Joint Controller Toggle ---
 let jointControllerActive = false;
+let jointSendingActive = false;
 
 function updateJointCtrlBtn() {
   const btn = document.getElementById("btnJointCtrl");
