@@ -55,6 +55,7 @@ from geometry_msgs.msg import PoseStamped, WrenchStamped
 HOST_IP = "192.168.1.142"   # This PC's IP on the robot subnet
 PORT = 30010                 # Port for wrench streaming (must not conflict with UR's 30001-30004)
 RATE_HZ = 125               # Wrench update rate
+WATCHDOG_MS = 500            # ms — default watchdog. 0 = hold forever. Sent with each wrench command.
 
 # Impedance gains (Cartesian spring)
 K_POS = np.array([300.0, 300.0, 300.0])   # N/m — translational stiffness
@@ -150,22 +151,37 @@ class ImpedanceController(Node):
   force_mode(task_frame, sel, wrench, 2, limits)
 
   local running = True
+  local timeout_count = 0
+  local watchdog_limit = 0
   while running:
-    # Read 6 doubles (48 bytes) from socket: fx, fy, fz, tx, ty, tz
-    local rx = socket_read_ascii_float(6, "wrench_socket", 0.008)
+    # Read 7 floats: fx, fy, fz, tx, ty, tz, timeout_ms
+    local rx = socket_read_ascii_float(7, "wrench_socket", 0.008)
 
-    if rx[0] >= 6:
+    if rx[0] >= 7:
       wrench[0] = rx[1]
       wrench[1] = rx[2]
       wrench[2] = rx[3]
       wrench[3] = rx[4]
       wrench[4] = rx[5]
       wrench[5] = rx[6]
+      local timeout_ms = rx[7]
+      if timeout_ms > 0:
+        watchdog_limit = ceil(timeout_ms / 8.0)
+      else:
+        watchdog_limit = 0
+      end
+      timeout_count = 0
 
       # Re-apply force_mode with updated wrench
       force_mode(task_frame, sel, wrench, 2, limits)
     elif rx[0] == 0:
-      # Timeout — keep previous wrench
+      # Timeout — no data received
+      timeout_count = timeout_count + 1
+      if watchdog_limit > 0 and timeout_count > watchdog_limit:
+        # Watchdog triggered — zero the wrench for safety
+        wrench = [0, 0, 0, 0, 0, 0]
+        force_mode(task_frame, sel, wrench, 2, limits)
+      end
       sleep(0.002)
     else:
       # Disconnect or error
@@ -189,6 +205,7 @@ end
         print(f"  Max force:      {MAX_FORCE:.0f} N")
         print(f"  Speed limit:    {SPEED_LIMIT:.2f} m/s")
         print(f"  Rate:           {RATE_HZ} Hz")
+        print(f"  Watchdog:       {'off (hold forever)' if WATCHDOG_MS == 0 else f'{WATCHDOG_MS} ms'}")
         print(f"{'='*65}")
         print(f"\n  Send targets via: ros2 topic pub /target_pose ...")
         print(f"  Press Ctrl+C to stop.\n")
@@ -242,8 +259,8 @@ end
                 wrench = self.compute_wrench()
 
                 # Send as ASCII floats (URScript socket_read_ascii_float format)
-                # Format: "(fx, fy, fz, tx, ty, tz)\n"
-                data = f"({wrench[0]:.2f},{wrench[1]:.2f},{wrench[2]:.2f},{wrench[3]:.2f},{wrench[4]:.2f},{wrench[5]:.2f})\n"
+                # Format: "(fx, fy, fz, tx, ty, tz, timeout_ms)\n"
+                data = f"({wrench[0]:.2f},{wrench[1]:.2f},{wrench[2]:.2f},{wrench[3]:.2f},{wrench[4]:.2f},{wrench[5]:.2f},{WATCHDOG_MS:.0f})\n"
                 try:
                     conn.sendall(data.encode())
                 except (BrokenPipeError, ConnectionResetError):
@@ -266,7 +283,7 @@ end
         finally:
             # Send stop signal (zero wrench)
             try:
-                conn.sendall(b"(0,0,0,0,0,0)\n")
+                conn.sendall(b"(0,0,0,0,0,0,0)\n")
                 time.sleep(0.1)
             except Exception:
                 pass
