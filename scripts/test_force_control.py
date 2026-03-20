@@ -112,19 +112,19 @@ class URScriptForceTest(Node):
 
     def run(self):
         # Configuration
-        target_force = -30.0    # N (negative = downward)
+        force_down = -30.0      # N (negative = downward)
+        force_up = 30.0         # N (positive = upward)
         speed_limit = 0.03      # m/s — very slow for safety
-        duration = 15.0         # seconds to hold force mode
+        phase_duration = 5.0    # seconds per phase
 
         print(f"\n{'='*65}")
-        print(f"  UR Force Mode Test (via URScript program)")
+        print(f"  UR Force Mode Test — Down then Up")
         print(f"{'='*65}")
-        print(f"  Target force Z:  {target_force:.1f} N")
+        print(f"  Phase 1: {force_down:.0f} N (down) for {phase_duration:.0f} s")
+        print(f"  Phase 2: {force_up:.0f} N (up) for {phase_duration:.0f} s")
         print(f"  Speed limit Z:   {speed_limit:.3f} m/s")
-        print(f"  Duration:        {duration:.0f} s")
         print(f"{'='*65}")
-        print(f"\n  This sends a URScript program that runs force_mode.")
-        print(f"  The External Control program will be interrupted.")
+        print(f"\n  The External Control program will be interrupted.")
         print(f"  After the test, restore with:")
         print(f"    ros2 service call /dashboard_client/play std_srvs/srv/Trigger")
         print(f"\n  Press Ctrl+C at any time to stop.\n")
@@ -135,24 +135,44 @@ class URScriptForceTest(Node):
         # Wait for publisher discovery
         time.sleep(1.0)
 
-        # Send the force mode program
-        print(f"  Sending force_mode program ({duration:.0f}s, {target_force:.0f}N)...")
-        self.start_force_mode(target_force, speed_limit, duration)
+        # Phase 1: Move downward
+        print(f"  Phase 1: Pushing DOWN ({force_down:.0f} N) for {phase_duration:.0f} s...")
+        self.start_force_mode(force_down, speed_limit, phase_duration)
 
-        # Monitor FT sensor while program runs
         start_time = time.time()
-        while self._running and (time.time() - start_time) < duration + 2:
+        while self._running and (time.time() - start_time) < phase_duration + 1:
             ft_mag = np.linalg.norm(self._ft_force)
             elapsed = time.time() - start_time
             print(
-                f"\r  [{elapsed:5.1f}s/{duration:.0f}s]  "
+                f"\r  DOWN [{elapsed:4.1f}s/{phase_duration:.0f}s]  "
                 f"FT: ({self._ft_force[0]:6.1f}, {self._ft_force[1]:6.1f}, {self._ft_force[2]:6.1f}) N  |  "
                 f"|F|: {ft_mag:5.1f} N",
                 end="", flush=True,
             )
             time.sleep(0.1)
 
-        # Stop force mode (in case Ctrl+C or early exit)
+        if not self._running:
+            print("\n\n  Stopped during phase 1.")
+            self.stop_force_mode()
+            return
+
+        # Phase 2: Move upward
+        print(f"\n\n  Phase 2: Pushing UP ({force_up:.0f} N) for {phase_duration:.0f} s...")
+        self.start_force_mode(force_up, speed_limit, phase_duration)
+
+        start_time = time.time()
+        while self._running and (time.time() - start_time) < phase_duration + 1:
+            ft_mag = np.linalg.norm(self._ft_force)
+            elapsed = time.time() - start_time
+            print(
+                f"\r  UP   [{elapsed:4.1f}s/{phase_duration:.0f}s]  "
+                f"FT: ({self._ft_force[0]:6.1f}, {self._ft_force[1]:6.1f}, {self._ft_force[2]:6.1f}) N  |  "
+                f"|F|: {ft_mag:5.1f} N",
+                end="", flush=True,
+            )
+            time.sleep(0.1)
+
+        # Stop force mode
         print("\n\n  Sending end_force_mode()...")
         self.stop_force_mode()
         time.sleep(0.5)
