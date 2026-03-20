@@ -166,6 +166,10 @@ joint_state_broadcaster:
   ros__parameters:
     use_local_topics: false
 
+force_mode_controller:
+  ros__parameters:
+    tf_prefix: ""
+
 # ============================================================
 # CRISP Broadcaster parameters
 # ============================================================

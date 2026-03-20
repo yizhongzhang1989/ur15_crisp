@@ -102,6 +102,7 @@ def generate_launch_description():
             "gravity_compensation",
             "cartesian_impedance_controller",
             "joint_impedance_controller",
+            "force_mode_controller",
         ],
         output="screen",
     )
