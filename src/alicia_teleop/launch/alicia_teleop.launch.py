@@ -1,10 +1,16 @@
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from common.workspace import get_config_path
+
 
 def generate_launch_description():
+    joint_config = get_config_path("joint_config.yaml")
+
     return LaunchDescription([
         DeclareLaunchArgument("rate", default_value="50.0"),
         DeclareLaunchArgument("trajectory_time", default_value="0.1"),
@@ -19,6 +25,7 @@ def generate_launch_description():
                 "port": "ttyACM0",
                 "baudrate": 1000000,
                 "query_rate": 200.0,
+                "joint_config": joint_config,
             }],
         ),
 
