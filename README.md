@@ -254,6 +254,55 @@ This starts RViz with the robot model, TF frames, and an interactive marker at t
 
 > **Safety**: Start with small movements. The marker publishes immediately — keep within ~10–20 cm of the current pose to avoid hitting torque limits.
 
+## Alicia Leader Arm Teleoperation
+
+The workspace supports teleoperation of the UR15 using an [Alicia-D leader arm](https://github.com/yizhongzhang1989/Alicia-D-Leader-ROS) (6-DOF). The leader arm's joint angles are read via serial and forwarded as joint targets to the UR15's joint impedance controller.
+
+### Setup
+
+1. Connect the Alicia leader arm via USB (typically `/dev/ttyACM0`)
+2. Build the packages (first time):
+   ```bash
+   colcon build --symlink-install --packages-select alicia_duo_leader_driver alicia_duo_leader_dashboard alicia_teleop
+   source install/setup.bash
+   ```
+
+### Launch
+
+```bash
+# Terminal 1: UR15 driver + controllers
+ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
+
+# Terminal 2: Web dashboard (port 8080)
+ros2 launch web_control web_control.launch.py
+
+# Terminal 3: Alicia driver + dashboard (port 8090) + teleop node
+ros2 launch alicia_teleop alicia_teleop.launch.py
+```
+
+### Controlling the Robot
+
+**Option A — Web dashboard (recommended):**
+1. Open `http://localhost:8080` in a browser
+2. In the **Joint** tab, click **Enable Joint Controller** (activates `joint_impedance_controller`)
+3. Click **Start Teleop** in the Alicia Teleop section
+4. Move the leader arm — the UR15 mirrors the joint angles in real time
+5. Click **Stop Teleop** to pause
+
+**Option B — Standalone teleop node:**
+The `alicia_teleop` launch also starts a standalone teleop node that publishes to `/scaled_joint_trajectory_controller/joint_trajectory`. Activate it by pressing the sync button on the leader arm (`but1 = 0x10`).
+
+### Joint Configuration
+
+The leader arm joint mapping is configured in `config/joint_config.yaml` (auto-created from template on first launch). Edit this file to adjust:
+- `direction` — flip joint rotation (`1.0` or `-1.0`)
+- `zero_offset` — align leader arm zero with UR15 zero (radians)
+- `continuous` — enable angle unwrapping for wrist joints
+
+### Alicia Dashboard
+
+The Alicia leader arm has its own web dashboard at `http://localhost:8090` for monitoring raw joint angles, zero calibration, and torque enable/disable.
+
 ## Structure
 
 ```
