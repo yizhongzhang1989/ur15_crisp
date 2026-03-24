@@ -9,3 +9,7 @@
 [submodule "src/vision_tracker_6d/ThirdParty/camera_calibration_toolkit"]
 	path = src/vision_tracker_6d/ThirdParty/camera_calibration_toolkit
 	url = https://github.com/yizhongzhang1989/camera_calibration_toolkit.git
+[submodule "src/alicia_leader"]
+	path = src/alicia_leader
+	url = https://github.com/yizhongzhang1989/Alicia-D-Leader-ROS.git
+	shallow = true
