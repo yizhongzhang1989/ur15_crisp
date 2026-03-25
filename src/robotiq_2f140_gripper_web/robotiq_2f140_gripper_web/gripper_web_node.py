@@ -105,7 +105,7 @@ class GripperWebNode(Node):
         }
     
     def control_gripper(self, position, speed, force):
-        """Send control goal to gripper (async, executor handles spinning)."""
+        """Send control goal to gripper — fire-and-forget for fast response."""
         if not self.control_client.wait_for_server(timeout_sec=0.5):
             return {'success': False, 'message': 'Control action server not available'}
         
@@ -116,11 +116,10 @@ class GripperWebNode(Node):
         
         goal_future = self.control_client.send_goal_async(goal)
         
-        # Wait for goal to be sent and accepted (executor handles spinning)
         import time
-        max_wait = 17.0  # Total timeout
         start_time = time.time()
         
+        # Wait only for goal acceptance (not motion completion)
         while not goal_future.done() and (time.time() - start_time) < 2.0:
             time.sleep(0.01)
         
@@ -131,20 +130,11 @@ class GripperWebNode(Node):
         if not goal_handle.accepted:
             return {'success': False, 'message': 'Goal rejected'}
         
-        # Wait for result (executor handles spinning)
-        result_future = goal_handle.get_result_async()
-        
-        while not result_future.done() and (time.time() - start_time) < max_wait:
-            time.sleep(0.01)
-        
-        if not result_future.done():
-            return {'success': False, 'message': 'Control timeout'}
-        
-        result = result_future.result().result
+        # Return immediately — don't wait for motion to finish
         return {
-            'success': result.success,
-            'final_position': result.final_position,
-            'object_detected': result.object_detected
+            'success': True,
+            'final_position': int(position),
+            'object_detected': False
         }
 
 

@@ -80,14 +80,14 @@ class RS485Client:
         return self._connected
     
     def send_command(self, command: Union[List[int], bytes], 
-                     response_delay: float = 0.1) -> Optional[bytes]:
+                     response_delay: float = 0.01) -> Optional[bytes]:
         """
         Send a command and receive response.
         Thread-safe for concurrent access.
         
         Args:
             command: Command bytes as list of integers or bytes object
-            response_delay: Delay before reading response in seconds (default: 0.1)
+            response_delay: Delay before reading response in seconds (default: 0.01)
         
         Returns:
             Response bytes, or None if failed
@@ -135,7 +135,7 @@ class RS485Client:
     
     def send_modbus_request(self, device_id: int, function_code: int, 
                            address: int, values: Union[int, List[int], None] = None,
-                           count: int = 1, response_delay: float = 0.1) -> Optional[bytes]:
+                           count: int = 1, response_delay: float = 0.01) -> Optional[bytes]:
         """Send a Modbus RTU request with automatic CRC calculation."""
         if not self._connected:
             return None

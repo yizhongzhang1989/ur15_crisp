@@ -25,6 +25,9 @@ function initializeControls() {
     // Slider value displays
     document.getElementById('position-slider').addEventListener('input', function(e) {
         document.getElementById('position-slider-value').textContent = e.target.value;
+        if (document.getElementById('realtime-check').checked) {
+            sendRealtimePosition(parseInt(e.target.value));
+        }
     });
     
     document.getElementById('speed-slider').addEventListener('input', function(e) {
@@ -180,6 +183,19 @@ async function activateGripper() {
         btn.disabled = false;
         btn.textContent = 'Activate Gripper';
     }
+}
+
+let _realtimePending = false;
+function sendRealtimePosition(position) {
+    if (_realtimePending) return; // throttle: skip if previous request in flight
+    _realtimePending = true;
+    const speed = parseInt(document.getElementById('speed-slider').value);
+    const force = parseInt(document.getElementById('force-slider').value);
+    fetch('/api/control', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({position, speed, force})
+    }).finally(() => { _realtimePending = false; });
 }
 
 async function moveToPosition(position, speed = null, force = null) {

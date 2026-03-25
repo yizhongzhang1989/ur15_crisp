@@ -14,7 +14,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
-from std_msgs.msg import Header
+from std_msgs.msg import Header, UInt8
 import time
 
 from robotiq_gripper_msgs.msg import GripperStatus
@@ -86,7 +86,18 @@ class RobotiqGripperNode(Node):
             self.publish_status,
             callback_group=self.status_callback_group
         )
-        
+
+        # Subscriber for continuous servo-like position control
+        # Publish UInt8 (0-255) to /gripper/target_position for real-time tracking
+        self.create_subscription(
+            UInt8,
+            '/gripper/target_position',
+            self._target_position_cb,
+            10,
+            callback_group=ReentrantCallbackGroup(),
+        )
+        self._last_target_position = -1  # track to avoid redundant commands
+
         self.get_logger().info('Robotiq Gripper Node initialized successfully')
         self.get_logger().info('Waiting for activation... Send goal to /gripper/activate action')
 
@@ -171,7 +182,7 @@ class RobotiqGripperNode(Node):
                     result.final_position = 0
                     result.object_detected = False
                     return result
-                time.sleep(0.1)
+                time.sleep(0.02)
                 continue
             
             # Update feedback
@@ -193,7 +204,7 @@ class RobotiqGripperNode(Node):
                 self.get_logger().warn('Gripper motion timeout')
                 break
             
-            time.sleep(0.1)
+            time.sleep(0.02)
         
         # Motion complete, set result
         goal_handle.succeed()
@@ -208,7 +219,20 @@ class RobotiqGripperNode(Node):
         )
         
         return result
-    
+
+    def _target_position_cb(self, msg: UInt8):
+        """Continuous servo-like position control via /gripper/target_position.
+
+        Sends move_to_position without waiting for completion, allowing
+        real-time streaming of position targets (e.g. from a leader arm).
+        Skips redundant commands if position hasn't changed.
+        """
+        pos = max(0, min(255, msg.data))
+        if pos == self._last_target_position:
+            return
+        self._last_target_position = pos
+        self.gripper.move_to_position(pos, speed=255, force=255, wait=False)
+
     def publish_status(self):
         """Periodically publish gripper status."""
         try:

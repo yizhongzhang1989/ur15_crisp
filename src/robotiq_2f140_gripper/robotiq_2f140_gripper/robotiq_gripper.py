@@ -63,7 +63,7 @@ class Robotiq2f140Gripper:
         if not response:
             return False
         
-        time.sleep(0.5)
+        time.sleep(0.1)
         
         # Activate gripper
         response = self.rs485.send_modbus_request(
@@ -83,7 +83,7 @@ class Robotiq2f140Gripper:
             if status and status.get('activated', False):
                 self._is_activated = True
                 return True
-            time.sleep(0.1)
+            time.sleep(0.02)
         
         return False
     
