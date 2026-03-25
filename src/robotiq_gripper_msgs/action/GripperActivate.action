@@ -1,0 +1,9 @@
+# Goal: Activate the gripper (no parameters needed)
+---
+# Result: Activation outcome
+bool success
+string message
+---
+# Feedback: Activation progress
+string status
+bool is_activated

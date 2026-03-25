@@ -1,0 +1,13 @@
+# Goal: Command to control the gripper
+uint8 position  # 0 = fully open, 255 = fully closed
+uint8 speed     # 0 = minimum speed, 255 = maximum speed
+uint8 force     # 0 = minimum force, 255 = maximum force
+---
+# Result: Final state after execution
+bool success
+uint8 final_position
+bool object_detected
+---
+# Feedback: Progress during execution
+uint8 current_position
+bool is_moving
