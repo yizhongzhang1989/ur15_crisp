@@ -16,6 +16,7 @@ import rclpy
 import yaml
 from flask import Flask, Response, jsonify, request, send_from_directory
 from sensor_msgs.msg import JointState
+from std_msgs.msg import UInt8
 from geometry_msgs.msg import WrenchStamped
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -68,6 +69,9 @@ class WebControlServer:
         self._alicia_teleop = False  # teleop mode: forward Alicia joints as target
         self._alicia_scale = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
         self._alicia_offset = np.zeros(6)
+        self._alicia_gripper_raw = None  # raw gripper value from Alicia (0-1000)
+        self._gripper_pub = None  # publisher for /gripper/target_position
+        self._gripper_timer = None
         self._plot_buffer = deque(maxlen=5000)  # high-rate plot samples
         self._plot_lock = threading.Lock()
         self._plot_downsample = 0  # counter for downsampling 500Hz to ~100Hz
@@ -118,6 +122,13 @@ class WebControlServer:
                 10,
                 callback_group=ReentrantCallbackGroup(),
             )
+
+        # Publisher for gripper servo control
+        self._gripper_pub = self.robot.node.create_publisher(UInt8, "/gripper/target_position", 10)
+        # Timer at 5 Hz for gripper teleop
+        self._gripper_timer = self.robot.node.create_timer(
+            0.2, self._gripper_timer_cb, callback_group=ReentrantCallbackGroup()
+        )
 
         # Wait for robot in background so Flask can start immediately
         t = threading.Thread(target=self._wait_for_robot, daemon=True)
@@ -179,14 +190,32 @@ class WebControlServer:
         self._target_joints = targets
 
     def _alicia_cb(self, msg):
-        """Cache Alicia leader arm joints and optionally forward as target."""
+        """Cache Alicia leader arm joints and gripper, optionally forward as target."""
         self._alicia_joints = np.array([
             msg.joint1, msg.joint2, msg.joint3,
             msg.joint4, msg.joint5, msg.joint6,
         ], dtype=np.float64)
+        self._alicia_gripper_raw = float(msg.gripper)
         if self._alicia_teleop and self._ready:
             target = self._alicia_joints * self._alicia_scale + self._alicia_offset
             self.robot.set_target_joint(target)
+
+    def _gripper_timer_cb(self):
+        """Send gripper position at 5 Hz when teleop is active."""
+        if not self._alicia_teleop or self._alicia_gripper_raw is None:
+            return
+        raw = self._alicia_gripper_raw
+        # Map: >=950 -> open (0), <=50 -> close (255), linear in between
+        if raw >= 950.0:
+            pos = 0
+        elif raw <= 50.0:
+            pos = 255
+        else:
+            pos = int(255.0 * (950.0 - raw) / 900.0)
+        pos = max(0, min(255, pos))
+        msg = UInt8()
+        msg.data = pos
+        self._gripper_pub.publish(msg)
 
     def _wait_for_robot(self):
         try:
