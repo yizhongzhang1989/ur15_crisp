@@ -174,6 +174,14 @@
           <button class="btn-copy" onclick="copyCurrentJointsToSliders()">Snap Target to Current</button>
           <button id="btnJointSend" class="btn-send" onclick="toggleJointSending()" style="padding:8px 20px;">Start Sending</button>
         </div>
+        <div style="margin-top:12px; padding:10px; border:1px solid var(--accent); border-radius:6px;">
+          <div style="display:flex; gap:10px; align-items:center; margin-bottom:6px;">
+            <b style="color:var(--green);">Alicia Teleop</b>
+            <button id="btnAliciaTeleop" class="btn-send" onclick="toggleAliciaTeleop()" style="padding:6px 16px;">Start Teleop</button>
+            <span id="aliciaStatus" style="font-size:0.85em; color:var(--dim);">Waiting for /arm_joint_state...</span>
+          </div>
+          <div id="aliciaJointsDisplay" style="font-family:monospace; font-size:0.85em; color:var(--dim);"></div>
+        </div>
         <div class="log" id="jointLog"></div>
       </div>
     </div>
@@ -198,7 +206,7 @@
 <script>
 const JN=["shoulder_pan","shoulder_lift","elbow","wrist_1","wrist_2","wrist_3"];
 let latestPose=null, latestJoints=null;
-function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.target_joints||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}pushPlotData(d);updateJointSlidersCurrent();};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
+function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.target_joints||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}pushPlotData(d);updateJointSlidersCurrent();if(d.alicia_joints!==undefined)updateAliciaDisplay(d.alicia_joints,d.alicia_teleop);};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
 function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");const jic=d.controllers.find(c=>c.name==="joint_impedance_controller");jointControllerActive=jic&&jic.state==="active";updateJointCtrlBtn();}).catch(()=>{});}
 function switchCtrl(n){const l=document.getElementById("ctrlLog");l.innerHTML=`<div>Switching to ${n}...</div>`;fetch("/api/switch_controller",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({controller:n})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Switched to ${n}</div>`:`<div class="err">${d.error}</div>`;refreshControllers();}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 function moveDelta(sx,sy,sz){const s=parseFloat(document.getElementById("stepSize").value)||0.02,l=document.getElementById("moveLog");fetch("/api/move_delta",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dx:sx*s,dy:sy*s,dz:sz*s})}).then(r=>r.json()).then(d=>{if(d.success){const p=d.new_position;l.innerHTML=`<div class="ok">Target: (${p.x}, ${p.y}, ${p.z})</div>`;}else l.innerHTML=`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
@@ -301,6 +309,8 @@ function toggleJointSending() {
   jointSendingActive = !jointSendingActive;
   const btn = document.getElementById("btnJointSend");
   if (jointSendingActive) {
+    // Disable Alicia teleop if manual sending is activated
+    if (aliciaTeleopActive) toggleAliciaTeleop();
     btn.textContent = "Stop Sending";
     btn.style.background = "var(--orange)";
     document.getElementById("jointLog").innerHTML = '<div class="ok">Sending target joints...</div>';
@@ -310,6 +320,49 @@ function toggleJointSending() {
     btn.style.background = "var(--blue)";
     document.getElementById("jointLog").innerHTML = '<div>Sending stopped</div>';
   }
+}
+
+let aliciaTeleopActive = false;
+function toggleAliciaTeleop() {
+  aliciaTeleopActive = !aliciaTeleopActive;
+  const btn = document.getElementById("btnAliciaTeleop");
+  fetch("/api/alicia_teleop", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({active: aliciaTeleopActive})
+  }).then(r => r.json()).then(d => {
+    if (d.success) {
+      if (aliciaTeleopActive) {
+        // Disable manual sending
+        if (jointSendingActive) { jointSendingActive = false; document.getElementById("btnJointSend").textContent = "Start Sending"; document.getElementById("btnJointSend").style.background = "var(--blue)"; }
+        btn.textContent = "Stop Teleop";
+        btn.style.background = "var(--orange)";
+        document.getElementById("aliciaStatus").textContent = "ACTIVE — forwarding joints";
+        document.getElementById("aliciaStatus").style.color = "var(--green)";
+        document.getElementById("jointLog").innerHTML = '<div class="ok">Alicia teleop active</div>';
+      } else {
+        btn.textContent = "Start Teleop";
+        btn.style.background = "var(--blue)";
+        document.getElementById("aliciaStatus").textContent = "Stopped";
+        document.getElementById("aliciaStatus").style.color = "var(--dim)";
+        document.getElementById("jointLog").innerHTML = '<div>Alicia teleop stopped</div>';
+      }
+    } else {
+      aliciaTeleopActive = !aliciaTeleopActive; // revert
+      document.getElementById("jointLog").innerHTML = `<div class="err">${d.error}</div>`;
+    }
+  }).catch(e => { aliciaTeleopActive = !aliciaTeleopActive; document.getElementById("jointLog").innerHTML = `<div class="err">${e}</div>`; });
+}
+
+function updateAliciaDisplay(aliciaJoints, teleop) {
+  const el = document.getElementById("aliciaJointsDisplay");
+  const st = document.getElementById("aliciaStatus");
+  if (!aliciaJoints || aliciaJoints.length === 0) {
+    el.textContent = "No data";
+    if (!teleop) { st.textContent = "Waiting for /arm_joint_state..."; st.style.color = "var(--dim)"; }
+    return;
+  }
+  el.innerHTML = JN.map((n, i) => `<span style="margin-right:12px;">${n}: ${(aliciaJoints[i]*180/Math.PI).toFixed(1)}°</span>`).join("");
+  if (teleop) { st.textContent = "ACTIVE — forwarding joints"; st.style.color = "var(--green)"; aliciaTeleopActive = true; document.getElementById("btnAliciaTeleop").textContent = "Stop Teleop"; document.getElementById("btnAliciaTeleop").style.background = "var(--orange)"; }
 }
 const KEY_PARAMS={'Task Stiffness':['task.k_pos_x','task.k_pos_y','task.k_pos_z','task.k_rot_x','task.k_rot_y','task.k_rot_z'],'Task Damping':['task.d_pos_x','task.d_pos_y','task.d_pos_z','task.d_rot_x','task.d_rot_y','task.d_rot_z'],'Nullspace':['nullspace.stiffness','nullspace.damping','nullspace.max_tau'],'Filters':['filter.q','filter.dq','filter.output_torque','filter.target_pose'],'Safety':['max_delta_tau','limit_torques','limit_error','stop_commands']};
 let currentParams={};

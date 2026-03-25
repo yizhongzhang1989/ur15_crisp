@@ -24,6 +24,12 @@ from crisp_py.robot import make_robot
 from crisp_py.control.parameters_client import ParametersClient
 from common.workspace import get_config_path
 
+try:
+    from alicia_duo_leader_driver.msg import ArmJointState
+    _HAS_ALICIA = True
+except ImportError:
+    _HAS_ALICIA = False
+
 _CRISP_CONTROLLERS = ["gravity_compensation", "cartesian_impedance_controller", "joint_impedance_controller"]
 
 
@@ -58,6 +64,10 @@ class WebControlServer:
         self._ft_torque = np.zeros(3)
         self._commanded_torques = None
         self._target_joints = None
+        self._alicia_joints = None  # latest Alicia leader arm joints (6,)
+        self._alicia_teleop = False  # teleop mode: forward Alicia joints as target
+        self._alicia_scale = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+        self._alicia_offset = np.zeros(6)
         self._plot_buffer = deque(maxlen=5000)  # high-rate plot samples
         self._plot_lock = threading.Lock()
         self._plot_downsample = 0  # counter for downsampling 500Hz to ~100Hz
@@ -98,6 +108,16 @@ class WebControlServer:
             10,
             callback_group=ReentrantCallbackGroup(),
         )
+
+        # Subscribe to Alicia leader arm (optional — only if message type available)
+        if _HAS_ALICIA:
+            self.robot.node.create_subscription(
+                ArmJointState,
+                "/arm_joint_state",
+                self._alicia_cb,
+                10,
+                callback_group=ReentrantCallbackGroup(),
+            )
 
         # Wait for robot in background so Flask can start immediately
         t = threading.Thread(target=self._wait_for_robot, daemon=True)
@@ -157,6 +177,16 @@ class WebControlServer:
             if jname in names:
                 targets[names.index(jname)] = pos
         self._target_joints = targets
+
+    def _alicia_cb(self, msg):
+        """Cache Alicia leader arm joints and optionally forward as target."""
+        self._alicia_joints = np.array([
+            msg.joint1, msg.joint2, msg.joint3,
+            msg.joint4, msg.joint5, msg.joint6,
+        ], dtype=np.float64)
+        if self._alicia_teleop and self._ready:
+            target = self._alicia_joints * self._alicia_scale + self._alicia_offset
+            self.robot.set_target_joint(target)
 
     def _wait_for_robot(self):
         try:
@@ -349,6 +379,19 @@ class WebControlServer:
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+        @app.route("/api/alicia_teleop", methods=["POST"])
+        def alicia_teleop():
+            """Toggle Alicia teleop mode. Body: {"active": true/false, "scale": [...], "offset": [...]}"""
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json()
+            self._alicia_teleop = bool(data.get("active", False))
+            if "scale" in data:
+                self._alicia_scale = np.array(data["scale"], dtype=float)
+            if "offset" in data:
+                self._alicia_offset = np.array(data["offset"], dtype=float)
+            return jsonify({"success": True, "active": self._alicia_teleop})
+
         @app.route("/api/save_config", methods=["POST"])
         def save_config():
             """Save current runtime parameters back into config/ur15_controllers.yaml,
@@ -486,6 +529,8 @@ class WebControlServer:
                             },
                             "cmd_torques": [round(float(v), 3) for v in self._commanded_torques] if self._commanded_torques is not None else [],
                             "target_joints": [round(float(v), 4) for v in self._target_joints] if self._target_joints is not None else [],
+                            "alicia_joints": [round(float(v), 4) for v in self._alicia_joints] if self._alicia_joints is not None else [],
+                            "alicia_teleop": self._alicia_teleop,
                         }
                         # Drain plot buffer and attach batch
                         with self._plot_lock:

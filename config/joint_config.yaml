@@ -1,0 +1,47 @@
+# Joint configuration for Alicia-D Leader arm
+# Maps leader arm joints to real robot joints.
+#
+# For each joint:
+#   direction:  1.0 or -1.0 — flips the joint angle if the leader arm
+#               rotates opposite to the real robot.
+#   zero_offset: radians — software zero point offset, added AFTER direction flip.
+#               Use this to align the leader arm's neutral position with
+#               the real robot's zero pose.
+#   continuous: true/false — enable angle unwrapping for joints that can
+#               rotate beyond ±180° (e.g., wrist roll). When true, the output
+#               tracks cumulative rotation instead of wrapping at ±π.
+
+joint_config:
+  joint1:
+    direction: 1.0
+    zero_offset: -1.57
+    continuous: false
+
+  joint2:
+    direction: 1.0
+    zero_offset: -1.57
+    continuous: false
+
+  joint3:
+    direction: 1.0
+    zero_offset: -2.1
+    continuous: false
+
+  joint4:
+    direction: -1.0
+    zero_offset: -1.57
+    continuous: true
+
+  joint5:
+    direction: -1.0
+    zero_offset: 0.0
+    continuous: true
+
+  joint6:
+    direction: -1.0
+    zero_offset: -1.57
+    continuous: true
+
+  gripper:
+    direction: 1.0
+    zero_offset: 0.0
