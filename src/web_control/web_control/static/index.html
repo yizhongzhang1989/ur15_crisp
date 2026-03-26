@@ -587,7 +587,6 @@ function toggleJointController() {
       .then(r => r.json()).then(d => {
         if (d.success) { log.innerHTML = '<div class="ok">Joint controller activated</div>'; }
         else { log.innerHTML = `<div class="err">${d.error}</div>`; }
-        checkJointControllerState();
         refreshControllers();
       }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
   } else {
@@ -596,7 +595,6 @@ function toggleJointController() {
       .then(r => r.json()).then(d => {
         if (d.success) { log.innerHTML = '<div class="ok">Joint controller deactivated</div>'; }
         else { log.innerHTML = `<div class="err">${d.error}</div>`; }
-        checkJointControllerState();
         refreshControllers();
       }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
   }
