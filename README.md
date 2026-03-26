@@ -269,15 +269,20 @@ The workspace supports teleoperation of the UR15 using an [Alicia-D leader arm](
 
 ### Launch
 
+A complete teleop session requires **4 terminals** (each needs `source install/setup.bash`):
+
 ```bash
-# Terminal 1: UR15 driver + controllers
+# Terminal 1: UR15 driver + CRISP controllers
 ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
 
-# Terminal 2: Web dashboard (port 8080)
+# Terminal 2: Web dashboard (port 8080) — robot control UI + gripper teleop bridge
 ros2 launch web_control web_control.launch.py
 
-# Terminal 3: Alicia driver + dashboard (port 8090) + teleop node
+# Terminal 3: Alicia leader arm driver + dashboard (port 8090) + teleop node
 ros2 launch alicia_teleop alicia_teleop.launch.py
+
+# Terminal 4: Gripper driver + gripper web UI (port 8088)
+ros2 launch robotiq_2f140_gripper robotiq_gripper_web.launch.py
 ```
 
 ### Controlling the Robot
@@ -308,15 +313,23 @@ The Alicia leader arm has its own web dashboard at `http://localhost:8090` for m
 ```
 ur15_crisp/
 ├── src/
-│   ├── crisp_controllers/        # [submodule] utiasDSL/crisp_controllers v2.1.0
-│   ├── crisp_py/                 # [submodule] utiasDSL/crisp_py v3.4.0
-│   └── ur15_bringup/       # UR15-specific bringup (config + launch)
-│       ├── config/
-│       │   └── ur15_controllers.yaml
-│       └── launch/
-│           └── ur15_crisp.launch.py
+│   ├── crisp_controllers/           # [submodule] torque-based ros2_control controllers
+│   ├── crisp_py/                    # [submodule] Python API for CRISP
+│   ├── ur15_bringup/                # UR15 launch + controller config
+│   ├── web_control/                 # Flask web dashboard (port 8080) + gripper teleop bridge
+│   ├── alicia_leader/               # Alicia-D leader arm driver
+│   ├── alicia_teleop/               # Leader → UR15 joint teleop node
+│   ├── robotiq_2f140_gripper/       # Robotiq 2F-140 gripper driver (Modbus/RS485)
+│   ├── robotiq_2f140_gripper_web/   # Gripper web UI (port 8088)
+│   ├── robotiq_gripper_msgs/        # Gripper message/action definitions
+│   ├── vision_tracker_6d/           # 6D chessboard pose tracking + web UI (port 8090)
+│   └── common/                      # Shared utilities
+├── config/
+│   ├── ur15_controllers.yaml        # Controller manager config (500 Hz)
+│   ├── joint_config.yaml            # Leader arm joint mapping
+│   └── vision_tracker.yaml          # Camera + tracking config
 ├── scripts/
-│   └── test_crisp_py.py          # crisp_py figure-eight test
+│   └── test_crisp_py.py             # crisp_py figure-eight test
 └── README.md
 ```
 

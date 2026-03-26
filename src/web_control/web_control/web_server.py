@@ -16,6 +16,7 @@ import rclpy
 import yaml
 from flask import Flask, Response, jsonify, request, send_from_directory
 from sensor_msgs.msg import JointState
+from std_msgs.msg import UInt8
 from geometry_msgs.msg import WrenchStamped
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -68,6 +69,8 @@ class WebControlServer:
         self._alicia_teleop = False  # teleop mode: forward Alicia joints as target
         self._alicia_scale = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
         self._alicia_offset = np.zeros(6)
+        self._gripper_pub = None  # publisher for /gripper/target_position
+        self._gripper_state = None  # current gripper state: 'open' or 'close'
         self._plot_buffer = deque(maxlen=5000)  # high-rate plot samples
         self._plot_lock = threading.Lock()
         self._plot_downsample = 0  # counter for downsampling 500Hz to ~100Hz
@@ -118,6 +121,9 @@ class WebControlServer:
                 10,
                 callback_group=ReentrantCallbackGroup(),
             )
+
+        # Publisher for gripper servo control
+        self._gripper_pub = self.robot.node.create_publisher(UInt8, "/gripper/target_position", 10)
 
         # Wait for robot in background so Flask can start immediately
         t = threading.Thread(target=self._wait_for_robot, daemon=True)
@@ -179,7 +185,7 @@ class WebControlServer:
         self._target_joints = targets
 
     def _alicia_cb(self, msg):
-        """Cache Alicia leader arm joints and optionally forward as target."""
+        """Cache Alicia leader arm joints and gripper, optionally forward as target."""
         self._alicia_joints = np.array([
             msg.joint1, msg.joint2, msg.joint3,
             msg.joint4, msg.joint5, msg.joint6,
@@ -187,6 +193,19 @@ class WebControlServer:
         if self._alicia_teleop and self._ready:
             target = self._alicia_joints * self._alicia_scale + self._alicia_offset
             self.robot.set_target_joint(target)
+            # Gripper: publish only on state change
+            raw = float(msg.gripper)
+            if raw < 300.0:
+                new_state = 'close'
+            elif raw > 700.0:
+                new_state = 'open'
+            else:
+                new_state = self._gripper_state  # in dead zone, keep current
+            if new_state is not None and new_state != self._gripper_state:
+                self._gripper_state = new_state
+                gripper_msg = UInt8()
+                gripper_msg.data = 255 if new_state == 'close' else 0
+                self._gripper_pub.publish(gripper_msg)
 
     def _wait_for_robot(self):
         try:
