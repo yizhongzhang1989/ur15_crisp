@@ -572,6 +572,8 @@ class WebControlServer:
                             "target_joints": [round(float(v), 4) for v in self._target_joints] if self._target_joints is not None else [],
                             "alicia_joints": [round(float(v), 4) for v in self._alicia_joints] if self._alicia_joints is not None else [],
                             "alicia_teleop": self._alicia_teleop,
+                            "gripper_raw": round(float(self._gripper_raw), 1) if self._gripper_raw is not None else None,
+                            "gripper_level": self._gripper_level,
                         }
                         # Drain plot buffer and attach batch
                         with self._plot_lock:
