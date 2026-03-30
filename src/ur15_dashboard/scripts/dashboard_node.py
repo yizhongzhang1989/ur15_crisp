@@ -13,6 +13,8 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped
 
+from ur15_dashboard.kinematics import forward_kinematics
+
 import http.server
 import json
 import math
@@ -199,6 +201,9 @@ class UR15DashboardNode(Node):
             rate = round(self._rate, 0)
             has_data = len(self._joint_positions) > 0
 
+        # Compute FK
+        tcp_matrix = forward_kinematics(positions).tolist()
+
         force_mag = round(float(np.linalg.norm(self._ft_force)), 2)
         state = {
             "connected": has_data,
@@ -220,6 +225,7 @@ class UR15DashboardNode(Node):
                 "force_mag": force_mag,
             },
             "rate": rate,
+            "tcp_matrix": tcp_matrix,
         }
 
         with self._lock:
