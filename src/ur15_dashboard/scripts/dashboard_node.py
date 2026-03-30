@@ -114,6 +114,10 @@ class UR15DashboardNode(Node):
         self._last_rate_time = time.time()
         self._rate = 0.0
 
+        # SSE throttle: push at ~30 Hz from joint_state callback
+        self._last_sse_push = 0.0
+        self._sse_interval = 1.0 / 30.0
+
         # Subscriptions
         self.create_subscription(
             JointState, "/joint_states", self._joint_state_cb, qos_profile_sensor_data
@@ -124,9 +128,6 @@ class UR15DashboardNode(Node):
             self._ft_cb,
             qos_profile_sensor_data,
         )
-
-        # SSE push timer at 10 Hz
-        self.create_timer(0.1, self._push_sse)
 
         # Serve from static dir
         from ament_index_python.packages import get_package_share_directory
@@ -152,6 +153,7 @@ class UR15DashboardNode(Node):
         self.get_logger().info(f"UR15 Dashboard: http://localhost:{web_port}")
 
     def _joint_state_cb(self, msg):
+        now = time.time()
         with self._lock:
             for i, name in enumerate(msg.name):
                 if name in JOINT_NAMES:
@@ -159,12 +161,16 @@ class UR15DashboardNode(Node):
                     self._joint_velocities[name] = msg.velocity[i] if i < len(msg.velocity) else 0.0
                     self._joint_efforts[name] = msg.effort[i] if i < len(msg.effort) else 0.0
             self._msg_count += 1
-            now = time.time()
             dt = now - self._last_rate_time
             if dt >= 1.0:
                 self._rate = self._msg_count / dt
                 self._msg_count = 0
                 self._last_rate_time = now
+
+        # Throttled SSE push (~30 Hz)
+        if now - self._last_sse_push >= self._sse_interval:
+            self._last_sse_push = now
+            self._push_sse()
 
     def _ft_cb(self, msg):
         self._ft_force = np.array(
