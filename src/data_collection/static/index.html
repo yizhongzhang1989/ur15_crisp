@@ -283,8 +283,9 @@
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.ShadowMaterial({ opacity: 0.3 }));
     ground.receiveShadow = true; scene.add(ground);
 
-    // Load URDF
+    // Load URDF — current robot
     let robot = null;
+    let ghostRobot = null;
     const loader = new URDFLoader();
     loader.load(URDF_PATH, (result) => {
         robot = result;
@@ -295,6 +296,29 @@
                 child.material = new THREE.MeshPhysicalMaterial({ color: c, metalness: 0.3, roughness: 0.5, clearcoat: 0.1 });
                 child.castShadow = true; child.receiveShadow = true;
             }
+        });
+        // Load ghost (target) robot with custom mesh loader that forces red material
+        const ghostMat = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(0.9, 0.25, 0.2),
+            metalness: 0.1, roughness: 0.6,
+            transparent: true, opacity: 0.35,
+            depthWrite: false,
+        });
+        const loader2 = new URDFLoader();
+        // Override mesh loader to force ghost material on every mesh at load time
+        loader2.loadMeshCb = function(path, manager, done) {
+            loader2.defaultMeshLoader(path, manager, (result) => {
+                result.traverse((child) => {
+                    if (child.isMesh) {
+                        child.material = ghostMat;
+                    }
+                });
+                done(result);
+            });
+        };
+        loader2.load(URDF_PATH, (result2) => {
+            ghostRobot = result2;
+            scene.add(ghostRobot);
         });
         document.getElementById('loading3d').style.display = 'none';
         document.getElementById('viewerInfo').style.display = 'block';
@@ -335,6 +359,10 @@
         if (robot && s.joints_rad) {
             for (let i = 0; i < JOINT_NAMES.length; i++)
                 robot.setJointValue(JOINT_NAMES[i], s.joints_rad[i]);
+        }
+        if (ghostRobot && s.target_joints_rad && s.target_joints_rad.length) {
+            for (let i = 0; i < JOINT_NAMES.length; i++)
+                ghostRobot.setJointValue(JOINT_NAMES[i], s.target_joints_rad[i]);
         }
     }
 

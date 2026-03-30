@@ -118,6 +118,9 @@ class DataCollectionDashboard(Node):
         self._joint_velocities = {}
         self._joint_efforts = {}
 
+        # Target joint state
+        self._target_positions = {}
+
         # F/T sensor
         self._ft_force = np.zeros(3)
         self._ft_torque = np.zeros(3)
@@ -140,6 +143,9 @@ class DataCollectionDashboard(Node):
             "/force_torque_sensor_broadcaster/wrench",
             self._ft_cb,
             qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            JointState, "/target_joint", self._target_joint_cb, 10
         )
 
         # Web server
@@ -197,6 +203,12 @@ class DataCollectionDashboard(Node):
             [msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z]
         )
 
+    def _target_joint_cb(self, msg):
+        with self._lock:
+            for i, name in enumerate(msg.name):
+                if name in JOINT_NAMES:
+                    self._target_positions[name] = msg.position[i] if i < len(msg.position) else 0.0
+
     def _push_sse(self):
         with self._lock:
             positions = [round(self._joint_positions.get(n, 0.0), 4) for n in JOINT_NAMES]
@@ -205,6 +217,7 @@ class DataCollectionDashboard(Node):
             efforts = [round(self._joint_efforts.get(n, 0.0), 2) for n in JOINT_NAMES]
             rate = round(self._rate, 0)
             has_data = len(self._joint_positions) > 0
+            target_positions = [round(self._target_positions.get(n, 0.0), 4) for n in JOINT_NAMES] if self._target_positions else []
 
         force_mag = round(float(np.linalg.norm(self._ft_force)), 2)
         state = {
@@ -227,6 +240,7 @@ class DataCollectionDashboard(Node):
                 "force_mag": force_mag,
             },
             "rate": rate,
+            "target_joints_rad": target_positions,
         }
 
         with self._lock:
