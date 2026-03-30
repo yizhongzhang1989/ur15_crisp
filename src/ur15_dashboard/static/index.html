@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UR15 Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        #viewer { display: block; width: 100vw; height: 100vh; }
+
+        #panel {
+            display: none; position: fixed; top: 12px; right: 12px;
+            background: rgba(22, 33, 62, 0.92); border: 1px solid rgba(79, 195, 247, 0.3);
+            border-radius: 10px; padding: 14px 18px; min-width: 310px; max-width: 400px;
+            backdrop-filter: blur(8px); z-index: 10; font-size: 13px;
+        }
+        #panel h2 { font-size: 16px; color: #4fc3f7; margin-bottom: 8px; }
+
+        .status-row { display: flex; gap: 12px; margin-bottom: 10px; }
+        .status-dot {
+            display: inline-block; width: 8px; height: 8px;
+            border-radius: 50%; margin-right: 5px; vertical-align: middle;
+        }
+        .status-dot.connected { background: #66bb6a; }
+        .status-dot.disconnected { background: #ef5350; }
+
+        .section { margin-top: 10px; }
+        .section-title {
+            font-size: 10px; color: #78909c; text-transform: uppercase;
+            letter-spacing: 1px; margin-bottom: 4px;
+        }
+
+        .joint-row {
+            display: flex; align-items: center; gap: 4px;
+            margin-bottom: 3px; height: 20px;
+        }
+        .joint-label { width: 24px; font-size: 11px; font-weight: 600; flex-shrink: 0; text-align: center; }
+        .joint-bar-bg {
+            flex: 1; height: 16px; background: #0f1923; border-radius: 3px;
+            position: relative; overflow: hidden;
+        }
+        .joint-bar {
+            height: 100%; border-radius: 3px;
+            transition: width 0.06s ease-out; position: absolute; top: 0;
+        }
+        .joint-bar.positive { left: 50%; }
+        .joint-bar.negative { right: 50%; }
+        .joint-center {
+            position: absolute; left: 50%; top: 0; bottom: 0;
+            width: 1px; background: #37474f; z-index: 2;
+        }
+        .joint-val {
+            width: 60px; text-align: right; font-size: 10px;
+            font-family: 'Consolas', monospace; color: #4fc3f7;
+        }
+
+        .info-row {
+            display: flex; justify-content: space-between;
+            padding: 2px 0; font-size: 12px;
+        }
+        .info-label { color: #78909c; }
+        .info-value { color: #66bb6a; font-family: 'Consolas', monospace; }
+        .info-value.force { color: #ffa726; }
+
+        #loading {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #4fc3f7; font-size: 18px; text-align: center;
+        }
+        .spinner {
+            border: 3px solid rgba(79,195,247,0.15);
+            border-top: 3px solid #4fc3f7;
+            border-radius: 50%; width: 40px; height: 40px;
+            animation: spin 1s linear infinite; margin: 0 auto 15px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "./vendor/three.module.js",
+            "three/addons/": "./vendor/addons/",
+            "three/examples/jsm/": "./vendor/addons/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <canvas id="viewer"></canvas>
+    <div id="loading"><div class="spinner"></div>Loading UR15 model...</div>
+
+    <div id="panel">
+        <h2>UR15</h2>
+        <div class="status-row">
+            <div><span class="status-dot disconnected" id="connDot"></span><span id="connText" style="font-size:11px;color:#78909c;">Disconnected</span></div>
+            <div style="margin-left:auto;"><span id="rateVal" style="font-size:11px;color:#78909c;">-- Hz</span></div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Joints</div>
+            <div id="joints"></div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Force / Torque</div>
+            <div class="info-row"><span class="info-label">F</span><span class="info-value force" id="fVal">(0, 0, 0) N</span></div>
+            <div class="info-row"><span class="info-label">T</span><span class="info-value force" id="tVal">(0, 0, 0) Nm</span></div>
+            <div class="info-row"><span class="info-label">|F|</span><span class="info-value force" id="fMag">0.00 N</span></div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Current (A)</div>
+            <div id="effortDisplay" style="font-family:monospace;font-size:11px;color:#78909c;">--</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import URDFLoader from './vendor/URDFLoader.js';
+
+        const URDF_PATH = 'robot/model.urdf';
+        const JOINT_NAMES = [
+            'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+            'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
+        ];
+        const SHORT_NAMES = ['J1','J2','J3','J4','J5','J6'];
+        const COLORS = ['#42a5f5','#66bb6a','#ffa726','#ef5350','#ab47bc','#26c6da'];
+        const JOINT_RANGE_DEG = 360; // ±180
+
+        // Build joint bar rows
+        function buildJointRows() {
+            const c = document.getElementById('joints');
+            for (let i = 0; i < 6; i++) {
+                c.innerHTML += `<div class="joint-row">
+                    <div class="joint-label" style="color:${COLORS[i]}">${SHORT_NAMES[i]}</div>
+                    <div class="joint-bar-bg"><div class="joint-center"></div>
+                        <div class="joint-bar" id="jbar${i}" style="width:0%"></div></div>
+                    <div class="joint-val" id="jval${i}">0.0°</div></div>`;
+            }
+        }
+        buildJointRows();
+
+        // Scene
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 100);
+        camera.up.set(0, 0, 1);
+        camera.position.set(1.5, -1.5, 1.2);
+
+        const canvas = document.getElementById('viewer');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        controls.target.set(0, 0, 0.5);
+        controls.update();
+
+        // Lighting
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        scene.add(new THREE.HemisphereLight(0xb0d4f1, 0x404040, 0.8));
+        const d1 = new THREE.DirectionalLight(0xffffff, 1.5);
+        d1.position.set(3, 5, 3); d1.castShadow = true;
+        d1.shadow.mapSize.set(2048, 2048); scene.add(d1);
+        const d2 = new THREE.DirectionalLight(0xffffff, 0.5);
+        d2.position.set(-2, 3, -1); scene.add(d2);
+        const d3 = new THREE.DirectionalLight(0xffffff, 0.3);
+        d3.position.set(0, -1, 3); scene.add(d3);
+
+        // Grid + ground (Z-up)
+        const grid = new THREE.GridHelper(3, 30, 0x444466, 0x333355);
+        grid.rotation.x = Math.PI / 2; scene.add(grid);
+        scene.add(new THREE.AxesHelper(0.2));
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(3, 3),
+            new THREE.ShadowMaterial({ opacity: 0.3 })
+        );
+        ground.receiveShadow = true; scene.add(ground);
+
+        // Load URDF
+        let robot = null;
+        const loader = new URDFLoader();
+        loader.load(URDF_PATH, (result) => {
+            robot = result;
+            scene.add(robot);
+            robot.traverse((child) => {
+                if (child.isMesh && child.material) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('panel').style.display = 'block';
+        }, undefined, (err) => {
+            document.getElementById('loading').innerHTML =
+                '<div style="color:#ff5252;">Failed to load 3D model<br>' + err + '</div>';
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // UI update helpers
+        function updateBar(idx, deg) {
+            const bar = document.getElementById(`jbar${idx}`);
+            const halfRange = JOINT_RANGE_DEG / 2;
+            const pct = Math.min(Math.abs(deg) / halfRange * 50, 50);
+            bar.style.width = pct + '%';
+            bar.className = 'joint-bar ' + (deg >= 0 ? 'positive' : 'negative');
+            bar.style.background = `linear-gradient(${deg >= 0 ? '90deg' : '270deg'}, ${COLORS[idx]}88, ${COLORS[idx]})`;
+            document.getElementById(`jval${idx}`).textContent = deg.toFixed(1) + '°';
+        }
+
+        function onState(s) {
+            for (let i = 0; i < 6; i++) updateBar(i, s.joints_deg[i]);
+
+            // F/T
+            if (s.ft) {
+                const f = s.ft.force, t = s.ft.torque;
+                document.getElementById('fVal').textContent = `(${f.x}, ${f.y}, ${f.z}) N`;
+                document.getElementById('tVal').textContent = `(${t.x}, ${t.y}, ${t.z}) Nm`;
+                document.getElementById('fMag').textContent = s.ft.force_mag + ' N';
+            }
+
+            // Effort / current
+            if (s.effort && s.effort.length) {
+                document.getElementById('effortDisplay').textContent =
+                    s.effort.map((e, i) => `${SHORT_NAMES[i]}: ${e.toFixed(2)}`).join('  ');
+            }
+
+            // Rate
+            document.getElementById('rateVal').textContent = (s.rate || '--') + ' Hz';
+
+            // Update 3D model
+            if (robot && s.joints_rad) {
+                for (let i = 0; i < JOINT_NAMES.length; i++)
+                    robot.setJointValue(JOINT_NAMES[i], s.joints_rad[i]);
+            }
+        }
+
+        // SSE Connection
+        function connectSSE() {
+            const dot = document.getElementById('connDot');
+            const txt = document.getElementById('connText');
+            const src = new EventSource('/api/events');
+            src.onopen = () => { dot.className = 'status-dot connected'; txt.textContent = 'Server'; };
+            src.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data.connected) {
+                        dot.className = 'status-dot connected';
+                        txt.textContent = 'Connected';
+                    }
+                    onState(data);
+                } catch(x) {}
+            };
+            src.onerror = () => {
+                dot.className = 'status-dot disconnected';
+                txt.textContent = 'Disconnected';
+                src.close();
+                setTimeout(connectSSE, 2000);
+            };
+        }
+        connectSSE();
+
+        // Render loop
+        (function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        })();
+    </script>
+</body>
+</html>
