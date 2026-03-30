@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Collection — UR15</title>
+    <style>
+        :root {
+            --bg: #1a1a2e; --card: #16213e; --accent: #0f3460;
+            --blue: #4fc3f7; --green: #66bb6a; --orange: #ffa726;
+            --red: #ef5350; --dim: #78909c; --text: #e0e0e0;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; height: 100vh; overflow: hidden; }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: auto 1fr;
+            height: 100vh; gap: 0;
+        }
+
+        .header {
+            grid-column: 1 / -1;
+            background: var(--card); border-bottom: 2px solid var(--accent);
+            padding: 8px 16px; display: flex; align-items: center; gap: 16px;
+        }
+        .header h1 { font-size: 16px; color: var(--blue); }
+        .header .status { font-size: 12px; }
+        .status-dot {
+            display: inline-block; width: 8px; height: 8px;
+            border-radius: 50%; margin-right: 5px; vertical-align: middle;
+        }
+        .status-dot.connected { background: var(--green); }
+        .status-dot.disconnected { background: var(--red); }
+        .status-dot.wait { background: var(--orange); }
+
+        .viewer-panel {
+            position: relative; background: #0d1117;
+            border-right: 1px solid var(--accent);
+            overflow: hidden;
+        }
+        .viewer-panel canvas { width: 100% !important; height: 100% !important; display: block; }
+
+        /* Floating info overlay on the 3D viewer */
+        .viewer-info {
+            position: absolute; top: 8px; left: 8px;
+            background: rgba(22, 33, 62, 0.88); border: 1px solid rgba(79, 195, 247, 0.25);
+            border-radius: 8px; padding: 10px 14px; font-size: 12px;
+            backdrop-filter: blur(6px); max-width: 300px;
+        }
+        .viewer-info .section-title {
+            font-size: 9px; color: var(--dim); text-transform: uppercase;
+            letter-spacing: 1px; margin-top: 6px; margin-bottom: 2px;
+        }
+        .viewer-info .section-title:first-child { margin-top: 0; }
+
+        .joint-row {
+            display: flex; align-items: center; gap: 3px;
+            margin-bottom: 2px; height: 16px;
+        }
+        .joint-label { width: 22px; font-size: 10px; font-weight: 600; flex-shrink: 0; text-align: center; }
+        .joint-bar-bg {
+            flex: 1; height: 12px; background: #0f1923; border-radius: 3px;
+            position: relative; overflow: hidden;
+        }
+        .joint-bar {
+            height: 100%; border-radius: 3px;
+            transition: width 0.06s ease-out; position: absolute; top: 0;
+        }
+        .joint-bar.positive { left: 50%; }
+        .joint-bar.negative { right: 50%; }
+        .joint-center {
+            position: absolute; left: 50%; top: 0; bottom: 0;
+            width: 1px; background: #37474f; z-index: 2;
+        }
+        .joint-val {
+            width: 50px; text-align: right; font-size: 9px;
+            font-family: 'Consolas', monospace; color: var(--blue);
+        }
+
+        .info-row {
+            display: flex; justify-content: space-between;
+            padding: 1px 0; font-size: 11px;
+        }
+        .info-label { color: var(--dim); }
+        .info-value { color: var(--green); font-family: 'Consolas', monospace; }
+        .info-value.force { color: var(--orange); }
+
+        /* Right panel: data collection controls */
+        .controls-panel {
+            background: var(--bg); padding: 16px; overflow-y: auto;
+        }
+        .card {
+            background: var(--card); border: 1px solid var(--accent);
+            border-radius: 8px; padding: 14px 16px; margin-bottom: 12px;
+        }
+        .card h2 { font-size: 14px; color: var(--blue); margin-bottom: 10px; }
+        .card .subtitle { font-size: 11px; color: var(--dim); margin-bottom: 8px; }
+
+        .btn {
+            padding: 8px 18px; border: none; border-radius: 5px;
+            font-size: 13px; cursor: pointer; font-weight: 600;
+        }
+        .btn-primary { background: var(--blue); color: #000; }
+        .btn-primary:hover { background: #29b6f6; }
+        .btn-danger { background: var(--red); color: #fff; }
+        .btn-danger:hover { background: #e53935; }
+        .btn-success { background: var(--green); color: #000; }
+        .btn-success:hover { background: #4caf50; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .stat-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+            margin-bottom: 10px;
+        }
+        .stat-box {
+            background: var(--bg); border-radius: 6px; padding: 8px 10px;
+            text-align: center;
+        }
+        .stat-box .label { font-size: 10px; color: var(--dim); text-transform: uppercase; }
+        .stat-box .value { font-size: 20px; font-weight: 700; color: var(--blue); font-family: 'Consolas', monospace; }
+
+        .log-area {
+            background: var(--bg); border: 1px solid var(--accent); border-radius: 5px;
+            padding: 8px; font-family: 'Consolas', monospace; font-size: 11px;
+            color: var(--dim); max-height: 150px; overflow-y: auto;
+        }
+
+        #loading3d {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--blue); font-size: 14px; text-align: center;
+        }
+        .spinner {
+            border: 3px solid rgba(79,195,247,0.15);
+            border-top: 3px solid var(--blue);
+            border-radius: 50%; width: 30px; height: 30px;
+            animation: spin 1s linear infinite; margin: 0 auto 10px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "./vendor/three.module.js",
+            "three/addons/": "./vendor/addons/",
+            "three/examples/jsm/": "./vendor/addons/"
+        }
+    }
+    </script>
+</head>
+<body>
+<div class="layout">
+    <!-- Header -->
+    <div class="header">
+        <h1>Data Collection — UR15</h1>
+        <div class="status">
+            <span class="status-dot wait" id="connDot"></span>
+            <span id="connText">Connecting...</span>
+            &nbsp; <span id="rateVal" style="color:var(--dim);">-- Hz</span>
+        </div>
+    </div>
+
+    <!-- Left: 3D viewer -->
+    <div class="viewer-panel" id="viewerPanel">
+        <canvas id="viewer"></canvas>
+        <div id="loading3d"><div class="spinner"></div>Loading UR15...</div>
+
+        <div class="viewer-info" id="viewerInfo" style="display:none;">
+            <div class="section-title">Joints</div>
+            <div id="joints"></div>
+            <div class="section-title">Force / Torque</div>
+            <div class="info-row"><span class="info-label">F</span><span class="info-value force" id="fVal">(0, 0, 0) N</span></div>
+            <div class="info-row"><span class="info-label">T</span><span class="info-value force" id="tVal">(0, 0, 0) Nm</span></div>
+            <div class="info-row"><span class="info-label">|F|</span><span class="info-value force" id="fMag">0.00 N</span></div>
+        </div>
+    </div>
+
+    <!-- Right: Controls -->
+    <div class="controls-panel">
+        <div class="card">
+            <h2>Collection Status</h2>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="label">Episodes</div>
+                    <div class="value" id="episodeCount">0</div>
+                </div>
+                <div class="stat-box">
+                    <div class="label">Current Step</div>
+                    <div class="value" id="stepCount">0</div>
+                </div>
+                <div class="stat-box">
+                    <div class="label">Status</div>
+                    <div class="value" id="collectionStatus" style="font-size:14px;color:var(--dim);">Idle</div>
+                </div>
+                <div class="stat-box">
+                    <div class="label">Duration</div>
+                    <div class="value" id="duration" style="font-size:14px;">0:00</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Controls</h2>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn btn-success" id="btnStart" onclick="startCollection()">Start Episode</button>
+                <button class="btn btn-danger" id="btnStop" onclick="stopCollection()" disabled>Stop</button>
+                <button class="btn btn-primary" id="btnDiscard" onclick="discardEpisode()" disabled>Discard Last</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Log</h2>
+            <div class="log-area" id="logArea">Ready.</div>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import URDFLoader from './vendor/URDFLoader.js';
+
+    const URDF_PATH = 'robot/model.urdf';
+    const JOINT_NAMES = [
+        'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+        'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
+    ];
+    const SHORT_NAMES = ['J1','J2','J3','J4','J5','J6'];
+    const COLORS = ['#42a5f5','#66bb6a','#ffa726','#ef5350','#ab47bc','#26c6da'];
+
+    // Build joint bars
+    (function() {
+        const c = document.getElementById('joints');
+        for (let i = 0; i < 6; i++) {
+            c.innerHTML += `<div class="joint-row">
+                <div class="joint-label" style="color:${COLORS[i]}">${SHORT_NAMES[i]}</div>
+                <div class="joint-bar-bg"><div class="joint-center"></div>
+                    <div class="joint-bar" id="jbar${i}" style="width:0%"></div></div>
+                <div class="joint-val" id="jval${i}">0.0°</div></div>`;
+        }
+    })();
+
+    // 3D Scene
+    const panel = document.getElementById('viewerPanel');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0d1117);
+
+    const camera = new THREE.PerspectiveCamera(50, panel.clientWidth / panel.clientHeight, 0.01, 100);
+    camera.up.set(0, 0, 1);
+    camera.position.set(1.5, -1.5, 1.2);
+
+    const canvas = document.getElementById('viewer');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setSize(panel.clientWidth, panel.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+    controls.target.set(0, 0, 0.5);
+    controls.update();
+
+    // Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    scene.add(new THREE.HemisphereLight(0xb0d4f1, 0x404040, 0.8));
+    const d1 = new THREE.DirectionalLight(0xffffff, 1.5);
+    d1.position.set(3, 5, 3); d1.castShadow = true;
+    d1.shadow.mapSize.set(2048, 2048); scene.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffffff, 0.5);
+    d2.position.set(-2, 3, -1); scene.add(d2);
+
+    // Grid
+    const grid = new THREE.GridHelper(3, 30, 0x444466, 0x333355);
+    grid.rotation.x = Math.PI / 2; scene.add(grid);
+    scene.add(new THREE.AxesHelper(0.2));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.ShadowMaterial({ opacity: 0.3 }));
+    ground.receiveShadow = true; scene.add(ground);
+
+    // Load URDF
+    let robot = null;
+    const loader = new URDFLoader();
+    loader.load(URDF_PATH, (result) => {
+        robot = result;
+        scene.add(robot);
+        robot.traverse((child) => {
+            if (child.isMesh && child.material) {
+                const c = child.material.color ? child.material.color.clone() : new THREE.Color(0.5, 0.5, 0.5);
+                child.material = new THREE.MeshPhysicalMaterial({ color: c, metalness: 0.3, roughness: 0.5, clearcoat: 0.1 });
+                child.castShadow = true; child.receiveShadow = true;
+            }
+        });
+        document.getElementById('loading3d').style.display = 'none';
+        document.getElementById('viewerInfo').style.display = 'block';
+    }, undefined, (err) => {
+        document.getElementById('loading3d').innerHTML =
+            '<div style="color:#ff5252;">Failed to load model</div>';
+    });
+
+    // Resize
+    function onResize() {
+        const w = panel.clientWidth, h = panel.clientHeight;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+    }
+    window.addEventListener('resize', onResize);
+    new ResizeObserver(onResize).observe(panel);
+
+    // UI update
+    function updateBar(idx, deg) {
+        const bar = document.getElementById(`jbar${idx}`);
+        const pct = Math.min(Math.abs(deg) / 180 * 50, 50);
+        bar.style.width = pct + '%';
+        bar.className = 'joint-bar ' + (deg >= 0 ? 'positive' : 'negative');
+        bar.style.background = `linear-gradient(${deg >= 0 ? '90deg' : '270deg'}, ${COLORS[idx]}88, ${COLORS[idx]})`;
+        document.getElementById(`jval${idx}`).textContent = deg.toFixed(1) + '°';
+    }
+
+    function onState(s) {
+        for (let i = 0; i < 6; i++) updateBar(i, s.joints_deg[i]);
+        if (s.ft) {
+            const f = s.ft.force, t = s.ft.torque;
+            document.getElementById('fVal').textContent = `(${f.x}, ${f.y}, ${f.z}) N`;
+            document.getElementById('tVal').textContent = `(${t.x}, ${t.y}, ${t.z}) Nm`;
+            document.getElementById('fMag').textContent = s.ft.force_mag + ' N';
+        }
+        document.getElementById('rateVal').textContent = (s.rate || '--') + ' Hz';
+        if (robot && s.joints_rad) {
+            for (let i = 0; i < JOINT_NAMES.length; i++)
+                robot.setJointValue(JOINT_NAMES[i], s.joints_rad[i]);
+        }
+    }
+
+    // SSE
+    function connectSSE() {
+        const dot = document.getElementById('connDot');
+        const txt = document.getElementById('connText');
+        const src = new EventSource('/api/events');
+        src.onopen = () => { dot.className = 'status-dot connected'; txt.textContent = 'Connected'; };
+        src.onmessage = (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.connected) { dot.className = 'status-dot connected'; txt.textContent = 'Connected'; }
+                onState(data);
+            } catch(x) {}
+        };
+        src.onerror = () => {
+            dot.className = 'status-dot disconnected'; txt.textContent = 'Disconnected';
+            src.close(); setTimeout(connectSSE, 2000);
+        };
+    }
+    connectSSE();
+
+    // Render loop
+    (function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    })();
+
+    // Expose control functions to global scope for onclick handlers
+    window.startCollection = function() {
+        addLog('Episode started (placeholder)');
+        document.getElementById('collectionStatus').textContent = 'Recording';
+        document.getElementById('collectionStatus').style.color = 'var(--green)';
+        document.getElementById('btnStart').disabled = true;
+        document.getElementById('btnStop').disabled = false;
+    };
+    window.stopCollection = function() {
+        addLog('Episode stopped (placeholder)');
+        document.getElementById('collectionStatus').textContent = 'Idle';
+        document.getElementById('collectionStatus').style.color = 'var(--dim)';
+        document.getElementById('btnStart').disabled = false;
+        document.getElementById('btnStop').disabled = true;
+        document.getElementById('btnDiscard').disabled = false;
+        const count = parseInt(document.getElementById('episodeCount').textContent) + 1;
+        document.getElementById('episodeCount').textContent = count;
+    };
+    window.discardEpisode = function() {
+        addLog('Last episode discarded (placeholder)');
+        const count = Math.max(0, parseInt(document.getElementById('episodeCount').textContent) - 1);
+        document.getElementById('episodeCount').textContent = count;
+        document.getElementById('btnDiscard').disabled = true;
+    };
+
+    function addLog(msg) {
+        const el = document.getElementById('logArea');
+        const ts = new Date().toLocaleTimeString();
+        el.innerHTML += `\n[${ts}] ${msg}`;
+        el.scrollTop = el.scrollHeight;
+    }
+</script>
+</body>
+</html>
