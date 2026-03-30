@@ -9,7 +9,7 @@ serves a web page with a 3D URDF viewer sub-window and data collection controls.
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Image
 from geometry_msgs.msg import WrenchStamped
 
 import http.server
@@ -20,6 +20,7 @@ import os
 import threading
 import time
 import numpy as np
+import cv2
 from functools import partial
 
 mimetypes.add_type("application/octet-stream", ".dae")
@@ -76,6 +77,22 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(state or {}).encode())
+        elif self.path == "/api/camera_stream":
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            try:
+                while True:
+                    frame = self._dashboard.get_camera_jpeg()
+                    if frame is not None:
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n\r\n")
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                    time.sleep(0.04)  # ~25 fps
+            except Exception:
+                pass
         elif self.path.startswith("/robot/") or self.path.startswith("/vendor/"):
             # Serve URDF, meshes, and JS vendor files from ur15_dashboard
             rel_path = self.path.lstrip("/")
@@ -104,9 +121,11 @@ class DataCollectionDashboard(Node):
         super().__init__("data_collection_dashboard")
         self.declare_parameter("port", 8086)
         self.declare_parameter("host", "0.0.0.0")
+        self.declare_parameter("camera_topic", "/ur15_camera/image_raw")
 
         web_port = self.get_parameter("port").value
         web_host = self.get_parameter("host").value
+        camera_topic = self.get_parameter("camera_topic").value
 
         self._latest_state = None
         self._lock = threading.Lock()
@@ -134,6 +153,10 @@ class DataCollectionDashboard(Node):
         self._last_sse_push = 0.0
         self._sse_interval = 1.0 / 30.0
 
+        # Camera image
+        self._camera_jpeg = None
+        self._camera_lock = threading.Lock()
+
         # Subscriptions
         self.create_subscription(
             JointState, "/joint_states", self._joint_state_cb, qos_profile_sensor_data
@@ -147,6 +170,10 @@ class DataCollectionDashboard(Node):
         self.create_subscription(
             JointState, "/target_joint", self._target_joint_cb, 10
         )
+        self.create_subscription(
+            Image, camera_topic, self._camera_cb, qos_profile_sensor_data
+        )
+        self.get_logger().info(f"Camera topic: {camera_topic}")
 
         # Web server
         from common.workspace import get_workspace_root
@@ -208,6 +235,29 @@ class DataCollectionDashboard(Node):
             for i, name in enumerate(msg.name):
                 if name in JOINT_NAMES:
                     self._target_positions[name] = msg.position[i] if i < len(msg.position) else 0.0
+
+    def _camera_cb(self, msg):
+        try:
+            # Convert ROS Image to JPEG
+            if msg.encoding in ("rgb8", "bgr8"):
+                h, w = msg.height, msg.width
+                img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w, 3)
+                if msg.encoding == "rgb8":
+                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            elif msg.encoding == "mono8":
+                h, w = msg.height, msg.width
+                img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w)
+            else:
+                return
+            _, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            with self._camera_lock:
+                self._camera_jpeg = jpeg.tobytes()
+        except Exception:
+            pass
+
+    def get_camera_jpeg(self):
+        with self._camera_lock:
+            return self._camera_jpeg
 
     def _push_sse(self):
         with self._lock:
