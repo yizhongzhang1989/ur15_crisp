@@ -217,6 +217,8 @@
                 <button class="btn btn-success" id="btnStart" onclick="startCollection()">Start Recording</button>
                 <button class="btn btn-danger" id="btnStop" onclick="stopCollection()" disabled>Stop</button>
                 <button class="btn btn-primary" id="btnDiscard" onclick="discardEpisode()" disabled>Discard Last</button>
+                <button class="btn" id="btnReplay" onclick="startReplay()" disabled style="background:#ab47bc;color:#fff;">Replay Last</button>
+                <button class="btn btn-danger" id="btnReplayStop" onclick="stopReplay()" style="display:none;">Stop Replay</button>
             </div>
         </div>
 
@@ -443,6 +445,9 @@
                         document.getElementById('btnStop').disabled = true;
                     }
                     document.getElementById('btnDiscard').disabled = !data.can_discard;
+                    // Replay button: enabled when can_discard and not replaying
+                    document.getElementById('btnReplay').disabled = !data.can_discard || data.replaying;
+                    document.getElementById('btnReplayStop').style.display = data.replaying ? '' : 'none';
                 }
                 if (data.episode_count !== undefined) document.getElementById('episodeCount').textContent = data.episode_count;
                 if (data.record_duration !== undefined && data.recording) {
@@ -503,10 +508,25 @@
         fetch('/api/recording/discard', {method: 'POST'}).then(r => r.json()).then(d => {
             if (d.success) {
                 addLog('Discarded: ' + d.discarded);
-                document.getElementById('btnDiscard').disabled = true;
             } else {
                 addLog('ERROR: ' + d.error);
             }
+        }).catch(e => addLog('ERROR: ' + e));
+    };
+    window.startReplay = function() {
+        addLog('Starting replay...');
+        fetch('/api/replay/start', {method: 'POST'}).then(r => r.json()).then(d => {
+            if (d.success) {
+                addLog('Replaying: ' + d.bag_path);
+            } else {
+                addLog('ERROR: ' + d.error);
+            }
+        }).catch(e => addLog('ERROR: ' + e));
+    };
+    window.stopReplay = function() {
+        fetch('/api/replay/stop', {method: 'POST'}).then(r => r.json()).then(d => {
+            if (d.success) addLog('Replay stopped');
+            else addLog('ERROR: ' + d.error);
         }).catch(e => addLog('ERROR: ' + e));
     };
 

@@ -125,6 +125,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/api/recording/discard":
             result = self._dashboard.discard_last()
             self._json_response(result)
+        elif self.path == "/api/replay/start":
+            result = self._dashboard.start_replay()
+            self._json_response(result)
+        elif self.path == "/api/replay/stop":
+            result = self._dashboard.stop_replay()
+            self._json_response(result)
         else:
             self.send_error(404)
 
@@ -182,6 +188,12 @@ class DataCollectionDashboard(Node):
         # Camera image
         self._camera_jpeg = None
         self._camera_lock = threading.Lock()
+
+        # Replay state
+        self._replaying = False
+        self._replay_thread = None
+        self._replay_stop_event = threading.Event()
+        self._arm_pub = None
 
         # Recording state
         self._recording = False
@@ -347,6 +359,7 @@ class DataCollectionDashboard(Node):
             "record_duration": round(time.time() - self._record_start_time, 1) if self._recording and self._record_start_time else 0,
             "save_path": self._default_save_path,
             "can_discard": self._last_bag_path is not None and not self._recording,
+            "replaying": self._replaying,
         }
 
         with self._lock:
@@ -447,6 +460,85 @@ class DataCollectionDashboard(Node):
             return {"success": True, "discarded": path, "episode": self._episode_count}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def start_replay(self):
+        """Replay the last episode by publishing /arm_joint_state from rosbag."""
+        if self._replaying:
+            return {"success": False, "error": "Already replaying"}
+        if self._recording:
+            return {"success": False, "error": "Cannot replay while recording"}
+        if not self._last_bag_path or not os.path.isdir(self._last_bag_path):
+            return {"success": False, "error": "No episode to replay"}
+
+        if self._arm_pub is None:
+            from alicia_duo_leader_driver.msg import ArmJointState
+            self._arm_pub = self.create_publisher(ArmJointState, "/arm_joint_state", 10)
+
+        self._replay_stop_event.clear()
+        self._replay_thread = threading.Thread(
+            target=self._replay_worker, args=(self._last_bag_path,), daemon=True
+        )
+        self._replay_thread.start()
+        self._replaying = True
+        self.get_logger().info(f"Replay started: {self._last_bag_path}")
+        return {"success": True, "bag_path": self._last_bag_path}
+
+    def stop_replay(self):
+        if not self._replaying:
+            return {"success": False, "error": "Not replaying"}
+        self._replay_stop_event.set()
+        if self._replay_thread:
+            self._replay_thread.join(timeout=3)
+        self._replaying = False
+        self.get_logger().info("Replay stopped")
+        return {"success": True}
+
+    def _replay_worker(self, bag_path):
+        """Read /arm_joint_state from bag and publish at original rate."""
+        try:
+            import rosbag2_py
+            from rclpy.serialization import deserialize_message
+            from alicia_duo_leader_driver.msg import ArmJointState
+
+            reader = rosbag2_py.SequentialReader()
+            storage_options = rosbag2_py.StorageOptions(uri=bag_path, storage_id="sqlite3")
+            converter_options = rosbag2_py.ConverterOptions(
+                input_serialization_format="cdr", output_serialization_format="cdr"
+            )
+            reader.open(storage_options, converter_options)
+
+            topic_filter = rosbag2_py.StorageFilter(topics=["/arm_joint_state"])
+            reader.set_filter(topic_filter)
+
+            messages = []
+            while reader.has_next():
+                topic, data, timestamp = reader.read_next()
+                messages.append((timestamp, data))
+
+            if not messages:
+                self.get_logger().warn("No /arm_joint_state messages in bag")
+                self._replaying = False
+                return
+
+            self.get_logger().info(f"Replaying {len(messages)} messages")
+
+            for i, (timestamp, data) in enumerate(messages):
+                if self._replay_stop_event.is_set():
+                    break
+                msg = deserialize_message(data, ArmJointState)
+                msg.header.stamp = self.get_clock().now().to_msg()
+                self._arm_pub.publish(msg)
+
+                if i + 1 < len(messages):
+                    dt = (messages[i + 1][0] - timestamp) * 1e-9
+                    if 0 < dt < 1.0:
+                        time.sleep(dt)
+
+        except Exception as e:
+            self.get_logger().error(f"Replay error: {e}")
+        finally:
+            self._replaying = False
+            self.get_logger().info("Replay finished")
 
 
 def main(args=None):
