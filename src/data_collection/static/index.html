@@ -471,6 +471,14 @@
     }
     connectSSE();
 
+    // Load save path on page load (in case SSE hasn't pushed yet)
+    fetch('/api/state').then(r => r.json()).then(d => {
+        if (d && d.save_path && !window._savePathSet) {
+            document.getElementById('savePath').value = d.save_path;
+            window._savePathSet = true;
+        }
+    }).catch(() => {});
+
     // Render loop
     (function animate() {
         requestAnimationFrame(animate);

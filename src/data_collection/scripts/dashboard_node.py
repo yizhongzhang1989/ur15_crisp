@@ -401,7 +401,13 @@ class DataCollectionDashboard(Node):
 
     def get_latest_state(self):
         with self._lock:
-            return self._latest_state
+            state = self._latest_state or {}
+        state["save_path"] = self._default_save_path
+        state["episode_count"] = self._count_episodes()
+        state["recording"] = self._recording
+        state["replaying"] = self._replaying
+        state["can_discard"] = self._last_bag_path is not None and not self._recording
+        return state
 
     def _count_episodes(self):
         """Count episode directories in save path."""
