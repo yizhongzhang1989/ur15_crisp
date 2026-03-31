@@ -95,6 +95,21 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     time.sleep(0.04)  # ~25 fps
             except Exception:
                 pass
+        elif self.path == "/process":
+            process_html = os.path.join(os.path.dirname(self._dashboard._static_dir), "static", "process.html")
+            if os.path.isfile(process_html):
+                with open(process_html, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+            else:
+                self.send_error(404)
+        elif self.path == "/api/process/status":
+            result = self._dashboard.get_process_status()
+            self._json_response(result)
         elif self.path.startswith("/robot/") or self.path.startswith("/vendor/"):
             # Serve URDF, meshes, and JS vendor files from ur15_dashboard
             rel_path = self.path.lstrip("/")
@@ -130,6 +145,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response(result)
         elif self.path == "/api/replay/stop":
             result = self._dashboard.stop_replay()
+            self._json_response(result)
+        elif self.path == "/api/process/convert":
+            result = self._dashboard.run_conversion(body)
             self._json_response(result)
         else:
             self.send_error(404)
@@ -233,6 +251,7 @@ class DataCollectionDashboard(Node):
 
         ws_root = get_workspace_root()
         static_dir = os.path.join(ws_root, "src", "data_collection", "static")
+        self._static_dir = static_dir
         os.chdir(static_dir)
 
         # Default save path
@@ -391,6 +410,71 @@ class DataCollectionDashboard(Node):
         return len([d for d in os.listdir(self._default_save_path)
                      if d.startswith("episode_") and os.path.isdir(
                          os.path.join(self._default_save_path, d))])
+
+    def get_process_status(self):
+        """Get status of rosbag episodes and dataset."""
+        from common.workspace import get_workspace_root
+        ws_root = get_workspace_root()
+        rosbag_dir = self._default_save_path
+        dataset_dir = os.path.join(ws_root, "tmp", "dataset")
+
+        # Scan rosbag episodes
+        bags = []
+        if os.path.isdir(rosbag_dir):
+            for d in sorted(os.listdir(rosbag_dir)):
+                if d.startswith("episode_") and os.path.isdir(os.path.join(rosbag_dir, d)):
+                    # Get bag info
+                    meta_file = os.path.join(rosbag_dir, d, "metadata.yaml")
+                    size_mb = sum(
+                        os.path.getsize(os.path.join(rosbag_dir, d, f))
+                        for f in os.listdir(os.path.join(rosbag_dir, d))
+                    ) / (1024 * 1024)
+                    bags.append({"name": d, "size_mb": round(size_mb, 1)})
+
+        # Scan dataset
+        dataset_info = {"exists": False, "episodes": 0, "h5_files": 0, "videos": 0}
+        if os.path.isdir(dataset_dir):
+            dataset_info["exists"] = True
+            ep_dir = os.path.join(dataset_dir, "episode")
+            data_dir = os.path.join(dataset_dir, "data")
+            vid_dir = os.path.join(dataset_dir, "video_agentview")
+            if os.path.isdir(ep_dir):
+                dataset_info["episodes"] = len([f for f in os.listdir(ep_dir) if f.endswith(".json")])
+            if os.path.isdir(data_dir):
+                dataset_info["h5_files"] = len([f for f in os.listdir(data_dir) if f.endswith(".h5")])
+            if os.path.isdir(vid_dir):
+                dataset_info["videos"] = len([f for f in os.listdir(vid_dir) if f.endswith(".mp4")])
+            meta_path = os.path.join(dataset_dir, "meta.json")
+            if os.path.isfile(meta_path):
+                with open(meta_path) as f:
+                    dataset_info["meta"] = json.load(f)
+
+        return {
+            "rosbag_dir": rosbag_dir,
+            "dataset_dir": dataset_dir,
+            "bags": bags,
+            "dataset": dataset_info,
+        }
+
+    def run_conversion(self, params):
+        """Run bag-to-dataset conversion."""
+        try:
+            import sys
+            from common.workspace import get_workspace_root
+            ws_root = get_workspace_root()
+            scripts_dir = os.path.join(ws_root, "scripts")
+            if scripts_dir not in sys.path:
+                sys.path.insert(0, scripts_dir)
+            from bag_to_dataset import convert_all
+
+            rosbag_dir = params.get("rosbag_dir", self._default_save_path)
+            dataset_dir = params.get("dataset_dir", os.path.join(ws_root, "tmp", "dataset"))
+            task_name = params.get("task_name", "teleop")
+
+            result = convert_all(rosbag_dir, dataset_dir, task_name)
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def register_sse_client(self, wfile):
         with self._sse_lock:
