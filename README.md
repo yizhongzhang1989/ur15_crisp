@@ -281,7 +281,7 @@ ros2 launch web_control web_control.launch.py
 # Terminal 3: Alicia leader arm driver + dashboard (port 8090) + teleop node
 ros2 launch alicia_teleop alicia_teleop.launch.py
 
-# Terminal 4: Gripper driver + gripper web UI (port 8088)
+# Terminal 4: Gripper driver + gripper web UI (port 9000)
 ros2 launch robotiq_2f140_gripper robotiq_gripper_web.launch.py
 
 # Terminal 5: UR15 3D dashboard (port 8085)
