@@ -355,7 +355,7 @@ class DataCollectionDashboard(Node):
             "rate": rate,
             "target_joints_rad": target_positions,
             "recording": self._recording,
-            "episode_count": self._episode_count,
+            "episode_count": self._count_episodes(),
             "record_duration": round(time.time() - self._record_start_time, 1) if self._recording and self._record_start_time else 0,
             "save_path": self._default_save_path,
             "can_discard": self._last_bag_path is not None and not self._recording,
@@ -384,6 +384,14 @@ class DataCollectionDashboard(Node):
         with self._lock:
             return self._latest_state
 
+    def _count_episodes(self):
+        """Count episode directories in save path."""
+        if not os.path.isdir(self._default_save_path):
+            return 0
+        return len([d for d in os.listdir(self._default_save_path)
+                     if d.startswith("episode_") and os.path.isdir(
+                         os.path.join(self._default_save_path, d))])
+
     def register_sse_client(self, wfile):
         with self._sse_lock:
             self._sse_clients.append(wfile)
@@ -407,7 +415,7 @@ class DataCollectionDashboard(Node):
         base_dir = self._default_save_path
         os.makedirs(base_dir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
-        bag_name = f"episode_{self._episode_count:04d}_{ts}"
+        bag_name = f"episode_{self._count_episodes():04d}_{ts}"
         bag_path = os.path.join(base_dir, bag_name)
         cmd = ["ros2", "bag", "record"] + self._record_topics + ["-o", bag_path]
         try:
