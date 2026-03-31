@@ -192,10 +192,6 @@
                     <div class="value" id="episodeCount">0</div>
                 </div>
                 <div class="stat-box">
-                    <div class="label">Current Step</div>
-                    <div class="value" id="stepCount">0</div>
-                </div>
-                <div class="stat-box">
                     <div class="label">Status</div>
                     <div class="value" id="collectionStatus" style="font-size:14px;color:var(--dim);">Idle</div>
                 </div>
@@ -203,13 +199,22 @@
                     <div class="label">Duration</div>
                     <div class="value" id="duration" style="font-size:14px;">0:00</div>
                 </div>
+                <div class="stat-box">
+                    <div class="label">Rate</div>
+                    <div class="value" id="dataRate" style="font-size:14px;">--</div>
+                </div>
             </div>
         </div>
 
         <div class="card">
             <h2>Controls</h2>
+            <div style="margin-bottom:8px;">
+                <label style="font-size:12px;color:var(--dim);">Save Path:</label>
+                <input type="text" id="savePath" value="" placeholder="~/rosbag_data"
+                    style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;font-size:12px;margin-top:4px;">
+            </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                <button class="btn btn-success" id="btnStart" onclick="startCollection()">Start Episode</button>
+                <button class="btn btn-success" id="btnStart" onclick="startCollection()">Start Recording</button>
                 <button class="btn btn-danger" id="btnStop" onclick="stopCollection()" disabled>Stop</button>
                 <button class="btn btn-primary" id="btnDiscard" onclick="discardEpisode()" disabled>Discard Last</button>
             </div>
@@ -288,6 +293,14 @@
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.ShadowMaterial({ opacity: 0.3 }));
     ground.receiveShadow = true; scene.add(ground);
 
+    // Force arrow at TCP
+    const forceArrow = new THREE.ArrowHelper(
+        new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, 0),
+        0.1, 0xff4444, 0.03, 0.02
+    );
+    forceArrow.visible = false;
+    scene.add(forceArrow);
+
     // Load URDF — current robot
     let robot = null;
     let ghostRobot = null;
@@ -359,6 +372,41 @@
             document.getElementById('fVal').textContent = `(${f.x}, ${f.y}, ${f.z}) N`;
             document.getElementById('tVal').textContent = `(${t.x}, ${t.y}, ${t.z}) Nm`;
             document.getElementById('fMag').textContent = s.ft.force_mag + ' N';
+
+            // Update force arrow
+            if (s.ft.force_mag > 0.5 && robot) {
+                // Get TCP position from FK (use joints_rad)
+                const q = s.joints_rad || [];
+                if (q.length === 6) {
+                    // Find TCP position from robot model
+                    const tcp = new THREE.Vector3();
+                    robot.updateMatrixWorld(true);
+                    // Use wrist_3_link world position as TCP approximation
+                    robot.traverse((child) => {
+                        if (child.name === 'tool0' || child.name === 'wrist_3_link') {
+                            child.getWorldPosition(tcp);
+                        }
+                    });
+                    // Force in tool frame -> base frame using robot model
+                    const toolMat = new THREE.Matrix4();
+                    robot.traverse((child) => {
+                        if (child.name === 'tool0' || child.name === 'wrist_3_link') {
+                            toolMat.copy(child.matrixWorld);
+                        }
+                    });
+                    const R = new THREE.Matrix3().setFromMatrix4(toolMat);
+                    const fVec = new THREE.Vector3(f.x, f.y, f.z).applyMatrix3(R);
+                    const mag = fVec.length();
+                    fVec.normalize();
+                    const len = Math.min(Math.max(mag * 0.02, 0.02), 0.5);
+                    forceArrow.position.copy(tcp);
+                    forceArrow.setDirection(fVec);
+                    forceArrow.setLength(len, len * 0.3, len * 0.15);
+                    forceArrow.visible = true;
+                }
+            } else {
+                forceArrow.visible = false;
+            }
         }
         document.getElementById('rateVal').textContent = (s.rate || '--') + ' Hz';
         if (robot && s.joints_rad) {
@@ -371,7 +419,7 @@
         }
     }
 
-    // SSE
+    // SSE — also update recording status
     function connectSSE() {
         const dot = document.getElementById('connDot');
         const txt = document.getElementById('connText');
@@ -382,6 +430,32 @@
                 const data = JSON.parse(e.data);
                 if (data.connected) { dot.className = 'status-dot connected'; txt.textContent = 'Connected'; }
                 onState(data);
+                // Update recording status from SSE
+                if (data.recording !== undefined) {
+                    const st = document.getElementById('collectionStatus');
+                    if (data.recording) {
+                        st.textContent = 'Recording'; st.style.color = 'var(--green)';
+                        document.getElementById('btnStart').disabled = true;
+                        document.getElementById('btnStop').disabled = false;
+                    } else {
+                        st.textContent = 'Idle'; st.style.color = 'var(--dim)';
+                        document.getElementById('btnStart').disabled = false;
+                        document.getElementById('btnStop').disabled = true;
+                    }
+                    document.getElementById('btnDiscard').disabled = !data.can_discard;
+                }
+                if (data.episode_count !== undefined) document.getElementById('episodeCount').textContent = data.episode_count;
+                if (data.record_duration !== undefined && data.recording) {
+                    const d = data.record_duration;
+                    document.getElementById('duration').textContent = Math.floor(d/60) + ':' + ('0'+Math.floor(d%60)).slice(-2);
+                } else if (!data.recording) {
+                    document.getElementById('duration').textContent = '0:00';
+                }
+                if (data.rate !== undefined) document.getElementById('dataRate').textContent = data.rate + ' Hz';
+                if (data.save_path && !window._savePathSet) {
+                    document.getElementById('savePath').value = data.save_path;
+                    window._savePathSet = true;
+                }
             } catch(x) {}
         };
         src.onerror = () => {
@@ -398,29 +472,42 @@
         renderer.render(scene, camera);
     })();
 
-    // Expose control functions to global scope for onclick handlers
+    // Control functions
     window.startCollection = function() {
-        addLog('Episode started (placeholder)');
-        document.getElementById('collectionStatus').textContent = 'Recording';
-        document.getElementById('collectionStatus').style.color = 'var(--green)';
-        document.getElementById('btnStart').disabled = true;
-        document.getElementById('btnStop').disabled = false;
+        const savePath = document.getElementById('savePath').value.trim();
+        addLog('Starting recording...');
+        fetch('/api/recording/start', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({save_path: savePath})
+        }).then(r => r.json()).then(d => {
+            if (d.success) {
+                addLog('Recording: ' + d.bag_path);
+            } else {
+                addLog('ERROR: ' + d.error);
+            }
+        }).catch(e => addLog('ERROR: ' + e));
     };
     window.stopCollection = function() {
-        addLog('Episode stopped (placeholder)');
-        document.getElementById('collectionStatus').textContent = 'Idle';
-        document.getElementById('collectionStatus').style.color = 'var(--dim)';
-        document.getElementById('btnStart').disabled = false;
-        document.getElementById('btnStop').disabled = true;
-        document.getElementById('btnDiscard').disabled = false;
-        const count = parseInt(document.getElementById('episodeCount').textContent) + 1;
-        document.getElementById('episodeCount').textContent = count;
+        addLog('Stopping...');
+        fetch('/api/recording/stop', {method: 'POST'}).then(r => r.json()).then(d => {
+            if (d.success) {
+                addLog('Saved: ' + d.bag_path + ' (' + d.duration + 's)');
+                document.getElementById('btnDiscard').disabled = false;
+            } else {
+                addLog('ERROR: ' + d.error);
+            }
+        }).catch(e => addLog('ERROR: ' + e));
     };
     window.discardEpisode = function() {
-        addLog('Last episode discarded (placeholder)');
-        const count = Math.max(0, parseInt(document.getElementById('episodeCount').textContent) - 1);
-        document.getElementById('episodeCount').textContent = count;
-        document.getElementById('btnDiscard').disabled = true;
+        if (!confirm('Discard last episode?')) return;
+        fetch('/api/recording/discard', {method: 'POST'}).then(r => r.json()).then(d => {
+            if (d.success) {
+                addLog('Discarded: ' + d.discarded);
+                document.getElementById('btnDiscard').disabled = true;
+            } else {
+                addLog('ERROR: ' + d.error);
+            }
+        }).catch(e => addLog('ERROR: ' + e));
     };
 
     function addLog(msg) {

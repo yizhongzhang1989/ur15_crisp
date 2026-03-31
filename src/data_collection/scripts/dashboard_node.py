@@ -17,6 +17,8 @@ import json
 import math
 import mimetypes
 import os
+import signal
+import subprocess
 import threading
 import time
 import numpy as np
@@ -111,6 +113,30 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+        if self.path == "/api/recording/start":
+            result = self._dashboard.start_recording(body.get("save_path", ""))
+            self._json_response(result)
+        elif self.path == "/api/recording/stop":
+            result = self._dashboard.stop_recording()
+            self._json_response(result)
+        elif self.path == "/api/recording/discard":
+            result = self._dashboard.discard_last()
+            self._json_response(result)
+        else:
+            self.send_error(404)
+
+    def _json_response(self, data):
+        body = json.dumps(data).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, format, *args):
         if len(args) >= 2 and "404" in str(args[1]):
             super().log_message(format, *args)
@@ -157,6 +183,21 @@ class DataCollectionDashboard(Node):
         self._camera_jpeg = None
         self._camera_lock = threading.Lock()
 
+        # Recording state
+        self._recording = False
+        self._record_proc = None
+        self._record_start_time = None
+        self._record_bag_path = None
+        self._episode_count = 0
+        self._last_bag_path = None
+        self._default_save_path = ""
+        self._record_topics = [
+            "/ur15_camera/image_raw",
+            "/arm_joint_state",
+            "/force_torque_sensor_broadcaster/wrench",
+            "/joint_states",
+        ]
+
         # Subscriptions
         self.create_subscription(
             JointState, "/joint_states", self._joint_state_cb, qos_profile_sensor_data
@@ -181,6 +222,9 @@ class DataCollectionDashboard(Node):
         ws_root = get_workspace_root()
         static_dir = os.path.join(ws_root, "src", "data_collection", "static")
         os.chdir(static_dir)
+
+        # Default save path
+        self._default_save_path = os.path.join(ws_root, "tmp", "rosbag_data")
 
         # Resolve ur15_dashboard static dir for robot/ and vendor/ assets
         ur15_static_dir = os.path.join(ws_root, "src", "ur15_dashboard", "static")
@@ -291,6 +335,11 @@ class DataCollectionDashboard(Node):
             },
             "rate": rate,
             "target_joints_rad": target_positions,
+            "recording": self._recording,
+            "episode_count": self._episode_count,
+            "record_duration": round(time.time() - self._record_start_time, 1) if self._recording and self._record_start_time else 0,
+            "save_path": self._default_save_path,
+            "can_discard": self._last_bag_path is not None and not self._recording,
         }
 
         with self._lock:
@@ -325,8 +374,72 @@ class DataCollectionDashboard(Node):
                 self._sse_clients.remove(wfile)
 
     def destroy_node(self):
+        if self._recording:
+            self.stop_recording()
         self._httpd.shutdown()
         super().destroy_node()
+
+    def start_recording(self, save_path=""):
+        if self._recording:
+            return {"success": False, "error": "Already recording"}
+        if save_path:
+            self._default_save_path = save_path
+        base_dir = self._default_save_path
+        os.makedirs(base_dir, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        bag_name = f"episode_{self._episode_count:04d}_{ts}"
+        bag_path = os.path.join(base_dir, bag_name)
+        cmd = ["ros2", "bag", "record"] + self._record_topics + ["-o", bag_path]
+        try:
+            self._record_proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid
+            )
+            self._recording = True
+            self._record_start_time = time.time()
+            self._record_bag_path = bag_path
+            self.get_logger().info(f"Recording started: {bag_path}")
+            return {"success": True, "bag_path": bag_path}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def stop_recording(self):
+        if not self._recording or not self._record_proc:
+            return {"success": False, "error": "Not recording"}
+        try:
+            os.killpg(os.getpgid(self._record_proc.pid), signal.SIGINT)
+            self._record_proc.wait(timeout=5)
+        except Exception:
+            try:
+                self._record_proc.kill()
+            except Exception:
+                pass
+        duration = round(time.time() - self._record_start_time, 1) if self._record_start_time else 0
+        bag_path = self._record_bag_path
+        self._recording = False
+        self._record_proc = None
+        self._record_start_time = None
+        self._last_bag_path = bag_path
+        self._episode_count += 1
+        self.get_logger().info(f"Recording stopped: {bag_path} ({duration}s)")
+        return {"success": True, "bag_path": bag_path, "duration": duration, "episode": self._episode_count}
+
+    def discard_last(self):
+        if self._recording:
+            return {"success": False, "error": "Stop recording first"}
+        if not self._last_bag_path:
+            return {"success": False, "error": "No episode to discard"}
+        import shutil
+        path = self._last_bag_path
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            self._episode_count = max(0, self._episode_count - 1)
+            self.get_logger().info(f"Discarded: {path}")
+            self._last_bag_path = None
+            return {"success": True, "discarded": path, "episode": self._episode_count}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
 
 def main(args=None):
