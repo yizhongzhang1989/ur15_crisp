@@ -226,6 +226,13 @@ class DataCollectionDashboard(Node):
         # Default save path
         self._default_save_path = os.path.join(ws_root, "tmp", "rosbag_data")
 
+        # Count existing episodes in save dir
+        if os.path.isdir(self._default_save_path):
+            existing = [d for d in os.listdir(self._default_save_path)
+                        if d.startswith("episode_") and os.path.isdir(os.path.join(self._default_save_path, d))]
+            self._episode_count = len(existing)
+            self.get_logger().info(f"Found {self._episode_count} existing episodes in {self._default_save_path}")
+
         # Resolve ur15_dashboard static dir for robot/ and vendor/ assets
         ur15_static_dir = os.path.join(ws_root, "src", "ur15_dashboard", "static")
         self.get_logger().info(f"Serving static from: {static_dir}")
