@@ -110,11 +110,6 @@
         </div>
 
         <div class="section">
-            <div class="section-title">Current (A)</div>
-            <div id="effortDisplay" style="font-family:monospace;font-size:11px;color:#78909c;">--</div>
-        </div>
-
-        <div class="section">
             <div class="section-title">TCP Pose (FK)</div>
             <div id="tcpDisplay" style="font-family:monospace;font-size:10px;color:#4fc3f7;white-space:pre;">--</div>
         </div>
@@ -132,7 +127,9 @@
         ];
         const SHORT_NAMES = ['J1','J2','J3','J4','J5','J6'];
         const COLORS = ['#42a5f5','#66bb6a','#ffa726','#ef5350','#ab47bc','#26c6da'];
-        const JOINT_RANGE_DEG = 360; // ±180
+        // Per-joint range in degrees (from URDF limits)
+        // J1,J2: ±360, J3(elbow): ±180, J4,J5,J6: ±360
+        const JOINT_RANGE_DEG = [360, 360, 180, 360, 360, 360];
 
         // Build joint bar rows
         function buildJointRows() {
@@ -142,7 +139,8 @@
                     <div class="joint-label" style="color:${COLORS[i]}">${SHORT_NAMES[i]}</div>
                     <div class="joint-bar-bg"><div class="joint-center"></div>
                         <div class="joint-bar" id="jbar${i}" style="width:0%"></div></div>
-                    <div class="joint-val" id="jval${i}">0.0°</div></div>`;
+                    <div class="joint-val" id="jval${i}">0.0°</div>
+                    <div class="joint-val" id="jeff${i}" style="color:#78909c;width:55px;">--A</div></div>`;
             }
         }
         buildJointRows();
@@ -225,7 +223,7 @@
         // UI update helpers
         function updateBar(idx, deg) {
             const bar = document.getElementById(`jbar${idx}`);
-            const halfRange = JOINT_RANGE_DEG / 2;
+            const halfRange = JOINT_RANGE_DEG[idx] / 2;
             const pct = Math.min(Math.abs(deg) / halfRange * 50, 50);
             bar.style.width = pct + '%';
             bar.className = 'joint-bar ' + (deg >= 0 ? 'positive' : 'negative');
@@ -234,7 +232,11 @@
         }
 
         function onState(s) {
-            for (let i = 0; i < 6; i++) updateBar(i, s.joints_deg[i]);
+            for (let i = 0; i < 6; i++) {
+                updateBar(i, s.joints_deg[i]);
+                if (s.effort && s.effort[i] !== undefined)
+                    document.getElementById(`jeff${i}`).textContent = s.effort[i].toFixed(2) + 'A';
+            }
 
             // F/T
             if (s.ft) {
@@ -242,12 +244,6 @@
                 document.getElementById('fVal').textContent = `(${f.x}, ${f.y}, ${f.z}) N`;
                 document.getElementById('tVal').textContent = `(${t.x}, ${t.y}, ${t.z}) Nm`;
                 document.getElementById('fMag').textContent = s.ft.force_mag + ' N';
-            }
-
-            // Effort / current
-            if (s.effort && s.effort.length) {
-                document.getElementById('effortDisplay').textContent =
-                    s.effort.map((e, i) => `${SHORT_NAMES[i]}: ${e.toFixed(2)}`).join('  ');
             }
 
             // Rate
