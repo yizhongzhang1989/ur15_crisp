@@ -269,7 +269,7 @@ The workspace supports teleoperation of the UR15 using an [Alicia-D leader arm](
 
 ### Launch
 
-A complete teleop session requires **4 terminals** (each needs `source install/setup.bash`):
+A complete session requires **7 terminals** (each needs `source install/setup.bash`):
 
 ```bash
 # Terminal 1: UR15 driver + CRISP controllers
@@ -281,8 +281,17 @@ ros2 launch web_control web_control.launch.py
 # Terminal 3: Alicia leader arm driver + dashboard (port 8090) + teleop node
 ros2 launch alicia_teleop alicia_teleop.launch.py
 
-# Terminal 4: Gripper driver + gripper web UI (port 8088)
+# Terminal 4: Gripper driver + gripper web UI (port 9000)
 ros2 launch robotiq_2f140_gripper robotiq_gripper_web.launch.py
+
+# Terminal 5: UR15 3D dashboard (port 8085)
+ros2 launch ur15_dashboard ur15_dashboard.launch.py
+
+# Terminal 6: Camera streaming (port 8019)
+ros2 launch camera_node ur15_cam_launch.py
+
+# Terminal 7: Data collection dashboard (port 8086)
+ros2 launch data_collection data_collection.launch.py
 ```
 
 ### Controlling the Robot
@@ -308,6 +317,38 @@ The leader arm joint mapping is configured in `config/joint_config.yaml` (auto-c
 
 The Alicia leader arm has its own web dashboard at `http://localhost:8090` for monitoring raw joint angles, zero calibration, and torque enable/disable.
 
+## UR15 Dashboard
+
+A standalone 3D web dashboard for monitoring the UR15 robot state.
+
+```bash
+ros2 launch ur15_dashboard ur15_dashboard.launch.py  # port 8085
+```
+
+Open `http://localhost:8085` — shows a live 3D URDF model driven by `/joint_states`, with a floating panel displaying joint positions, force/torque, and motor currents.
+
+## Camera
+
+The `camera_node` package opens a USB/RTSP camera and streams frames as ROS 2 image topics.
+
+```bash
+ros2 launch camera_node ur15_cam_launch.py  # port 8019
+```
+
+Camera configuration (IP, RTSP URL, resolution, FPS) is in `config/robot_config.yaml` under the `ur15.camera` section.
+
+## Data Collection Dashboard
+
+A web dashboard for controlling data collection episodes, with a split layout:
+- **Left**: 3D URDF viewer showing current robot pose and a red semi-transparent ghost for the target pose
+- **Right**: Episode controls (start/stop/discard), status counters, and log
+
+```bash
+ros2 launch data_collection data_collection.launch.py  # port 8086
+```
+
+Open `http://localhost:8086`. The 3D viewer reuses URDF/mesh assets from `ur15_dashboard` — no duplicate files.
+
 ## Structure
 
 ```
@@ -316,17 +357,21 @@ ur15_crisp/
 │   ├── crisp_controllers/           # [submodule] torque-based ros2_control controllers
 │   ├── crisp_py/                    # [submodule] Python API for CRISP
 │   ├── ur15_bringup/                # UR15 launch + controller config
+│   ├── ur15_dashboard/              # 3D web dashboard for UR15 (port 8085)
 │   ├── web_control/                 # Flask web dashboard (port 8080) + gripper teleop bridge
+│   ├── data_collection/             # Data collection dashboard (port 8086)
+│   ├── camera_node/                 # Camera streaming node (RTSP/USB → ROS image topics)
 │   ├── alicia_leader/               # Alicia-D leader arm driver
 │   ├── alicia_teleop/               # Leader → UR15 joint teleop node
 │   ├── robotiq_2f140_gripper/       # Robotiq 2F-140 gripper driver (Modbus/RS485)
 │   ├── robotiq_2f140_gripper_web/   # Gripper web UI (port 8088)
 │   ├── robotiq_gripper_msgs/        # Gripper message/action definitions
 │   ├── vision_tracker_6d/           # 6D chessboard pose tracking + web UI (port 8090)
-│   └── common/                      # Shared utilities
+│   └── common/                      # Shared utilities (workspace, config_manager)
 ├── config/
 │   ├── ur15_controllers.yaml        # Controller manager config (500 Hz)
 │   ├── joint_config.yaml            # Leader arm joint mapping
+│   ├── robot_config.yaml            # Robot/camera/service configuration
 │   └── vision_tracker.yaml          # Camera + tracking config
 ├── scripts/
 │   └── test_crisp_py.py             # crisp_py figure-eight test

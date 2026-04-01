@@ -1,0 +1,315 @@
+# Robot DC Configuration Template
+# 
+# Copy this file to robot_config.yaml and update with your actual values
+# DO NOT commit robot_config.yaml to git (it contains sensitive information)
+#
+# Usage:
+#   cp robot_config.example.yaml robot_config.yaml
+#   nano robot_config.yaml  # Edit with your values
+
+version: "2.0"
+
+# ============================================================================
+# UR15 Robot Configuration
+# ============================================================================
+ur15:
+  robot:
+    type: "ur15"            # Robot type for ur_robot_driver
+    ip: "192.168.1.15"      # UR15 robot IP address
+    ports:
+      control: 30002          # Primary interface port
+      dashboard: 29999        # Dashboard server port
+      rtde: 30004            # Real-time data exchange port
+      modbus: 502            # Modbus TCP port
+      rs485: 54321           # RS485 communication port
+    launch_rviz: false      # Launch RViz visualization
+    max_velocity: 1.0
+    max_acceleration: 1.4
+    joint_names:
+      - "shoulder_pan_joint"
+      - "shoulder_lift_joint"
+      - "elbow_joint"
+      - "wrist_1_joint"
+      - "wrist_2_joint"
+      - "wrist_3_joint"
+  # tools configuration
+  tool:
+    tool_rotate:
+      length: 0.325          # Length of the tool rotate from flange to tip (meters)
+      angle_z: -31           # Rotation angle around Z axis (degrees)
+
+    tool_pushpull:
+      length: 0.325         # Length of the pushpull tool from flange to tip (meters)
+      angle_z: -31             # Rotation angle around Z axis (degrees)
+    
+    tool_frame:
+      length: 0.345          # Length of the tool frame from flange to tip (meters)
+      angle_z: -33           # Rotation angle around Z axis (degrees)
+
+    tool_extract:
+      length: 0.225          # Length of the tool extract from flange to tip (meters)
+      angle_z: -31           # Rotation angle around Z axis (degrees)
+  
+  task:
+    rack_positioning:
+      workflow_name: "wf_rack_location_simplify.json"
+
+  # Launch configuration: modules and sequence
+  launch_modules:
+    - package: "robot_status_redis"
+      launch_file: "robot_status_launch.py"
+      delay: 0.0
+      enabled: true
+    - package: "positioning_3d_service"
+      launch_file: "positioning_3d_launch.py"
+      delay: 0.0
+      enabled: true
+    - package: "image_labeling_service"
+      launch_file: "image_labeling_launch.py"
+      delay: 0.0
+      enabled: true
+    - package: "camcalib_web_service"
+      launch_file: "camcalib_web_launch.py"
+      delay: 0.0
+      enabled: true
+    - package: "ur15_workflow"
+      launch_file: "workflow_config_center_launch.py"
+      delay: 0.0
+      enabled: true
+    - package: "ur15_robot_arm"
+      launch_file: "ur15_control_launch.py"
+      delay: 0.0
+      enabled: true
+    - package: "camera_node"
+      launch_file: "ur15_cam_launch.py"
+      delay: 0.0
+      enabled: true
+    - package: "ur15_web"
+      launch_file: "ur15_web_launch.py"
+      delay: 5.0
+      enabled: true
+  
+  # Camera configuration
+  camera:
+    name: "UR15Camera"
+    ip: "192.168.1.101"    # UPDATE: Camera IP address
+    rtsp_url: "rtsp://admin:123456@192.168.1.101/stream0"  # UPDATE: Change password
+    server_port: 8019
+    topic: "/ur15_camera/image_raw"
+    stream_fps: 25
+    jpeg_quality: 75
+    max_width: 800
+    publish_ros_image: true
+  
+  # Web service configuration
+  web:
+    port: 8030
+    camera_topic: "/ur15_camera/image_raw"
+    dataset_path: "dataset"
+    calibration_data_path: "temp/ur15_cam_calibration_data"
+    calibration_result_path: "temp/ur15_cam_calibration_result"
+    chessboard_config_path: "temp/ur15_cam_calibration_data/chessboard_config.json"
+    rack_positions: "temp/ur15_rack_positions.json"
+  
+  # Camera calibration settings
+  calibration:
+    chessboard:
+      rows: 9
+      cols: 6
+      square_size: 0.025  # meters
+    collect:
+      num_poses: 20
+      delay_seconds: 2
+
+# ============================================================================
+# Duco Robot Configuration (GCR5-910)
+# ============================================================================
+duco:
+  # Network configuration
+  network:
+    ip: "192.168.1.10"        # Duco robot IP address
+    port: 7003                # Thrift RPC port
+  
+  # Camera configuration
+  camera:
+    name: "DucoCamera"
+    ip: "192.168.1.102"      # Duco camera IP
+    rtsp_url: "rtsp://admin:123456@192.168.1.102/stream0" # rtsp url with password
+    server_port: 8020
+    topic: "/duco_camera/image_raw"
+    stream_fps: 25
+    jpeg_quality: 75
+    max_width: 800
+    publish_ros_image: true
+  
+  # Paths
+  paths:
+    dataset: "dataset_duco"
+    calibration_data: "temp/duco_cam_calibration_result"
+  
+  # Robot specifications
+  robot:
+    joint_count: 6
+    max_velocity: 0.8
+    max_acceleration: 1.2
+
+# ============================================================================
+# Services Configuration (Independent services not tied to specific robots)
+# ============================================================================
+services:
+  # Image Labeling Service
+  image_labeling:
+    host: "0.0.0.0"
+    port: 8007
+  
+  # 3D Positioning Service
+  positioning_3d:
+    host: "0.0.0.0"
+    port: 8004
+    ffpp_url: "http://10.172.100.34:8001"  # UPDATE: FlowFormer++ server URL
+    dataset_path: "dataset"
+  
+  # Camera Calibration Web Service
+  camcalib_web:
+    host: "0.0.0.0"
+    port: 8006
+  
+  # Workflow Config Center Service
+  workflow_config_center:
+    host: "0.0.0.0"
+    port: 8008
+  
+  # Robot Status Service (Redis-based status management and web dashboard)
+  robot_status_redis:
+    redis:
+      host: "localhost"  # UPDATE: Redis server host if remote
+      port: 6379
+      db: 0
+      password: null  # Set password if Redis requires authentication
+    web:
+      enabled: true
+      host: "0.0.0.0"
+      port: 8005
+    auto_save_file_path: "temp/robot_status_auto_save.json"
+
+# ============================================================================
+# Shared/Common Configuration
+# ============================================================================
+shared:
+  # Network configuration
+  network:
+    # Courier system (height sensor)
+    courier:
+      ip: "192.168.1.3"   # UPDATE: Courier system IP
+      port: 8090
+    
+    # FlowFormer++ server for keypoint tracking
+    ffpp_server:
+      url: "http://10.172.100.34:8001"  # FFPP server URL
+
+  GB200_rack:
+    rack_inner_width: 0.550
+    rack_inner_height: 2.141
+    rack_origin_to_unit_start_y: 0.190
+    rack_origin_to_unit_start_z: 0.03715
+    unit_length: 0.04445
+
+# ============================================================================
+# Lift Robot (Courier Platform) Configuration
+# ============================================================================
+lift_robot:
+  # Modbus Driver Node Configuration
+  modbus_driver:
+    port: "auto"              # Serial port (auto-detect RS485 device, or specify like /dev/ttyUSB0)
+    baudrate: 115200          # Serial baudrate
+    timeout: 0.03             # Modbus RTU timeout in seconds (0.03 = 30ms, normal response: 10-20ms)
+    dashboard:
+      enabled: true          # Enable Modbus dashboard web interface
+      host: "0.0.0.0"         # Dashboard host address
+      port: 5000              # Dashboard port
+      log_dir: null           # Log directory (null = auto to temp/modbus_logs)
+  
+  # Lift Platform Node Configuration
+  platform:
+    device_id: 50             # Modbus slave ID for platform controller
+    calibration_file: "platform_overshoot_calibration.json"  # Overshoot calibration config in colcon_ws/config/
+    range_file: "platform_range.json"  # Platform range limits config in colcon_ws/config/
+    max_force_limit: 50000.0    # Maximum allowable combined force (N) before emergency stop (CRITICAL SAFETY PARAMETER), initially set to 50000N to disable this function, should change to reasonable value after calibration
+    launch_delay: 3.0         # Launch delay after system start (seconds, allows modbus driver to initialize)
+    status_publish_rate: 10.0 # Status publish frequency in Hz (10Hz = 100ms interval, higher = more responsive but more CPU load)
+    
+    # Overshoot calibration fine-tuning parameters
+    overshoot_settle_time: 1.0   # Wait time after stop for platform to stabilize (seconds), affects calibration accuracy
+    
+    # Control Action Timeouts (seconds) - Max execution time for each control mode
+    # If action exceeds timeout, it will abort with 'timeout' completion_reason
+    timeouts:
+      goto_height: 300.0       # GotoHeight action timeout (default: 60s)
+      force_control: 300.0     # ForceControl action timeout (default: 60s)
+      hybrid_control: 300.0    # HybridControl action timeout (default: 60s)
+      manual_move: 300.0      # ManualMove action timeout (default: 300s, longer for manual operation)
+  
+  # Draw Wire Sensor Node Configuration
+  draw_wire_sensor:
+    device_id: 51             # Modbus slave ID for draw wire sensor
+    read_interval: 0.06       # Read interval in seconds (0.06 = ~17Hz, 0.02 = 50Hz)
+    topic: "/draw_wire_sensor/data"
+    calibration_file: "draw_wire_calibration.json"  # Calibration config in colcon_ws/config/
+    launch_delay: 4.0         # Delay after modbus driver ready (seconds)
+  
+  # Force Sensor Node Configuration (Right Sensor)
+  force_sensor_right:
+    device_id: 52             # Modbus slave ID for right force sensor
+    read_interval: 0.06       # Read interval in seconds (0.06 = ~17Hz, 0.02 = 50Hz)
+    topic: "/force_sensor_right"
+    node_name_suffix: "right"
+    calibration_file: "force_sensor_calibration_right.json"  # Calibration config in colcon_ws/config/
+    launch_delay: 4.5         # Delay after modbus driver ready (seconds)
+    dashboard:
+      enabled: true           # Enable force sensor configuration dashboard
+      host: "0.0.0.0"         # Dashboard host address
+      port: 5001              # Dashboard port (different from modbus dashboard 5000)
+  
+  # Force Sensor Node Configuration (Left Sensor)
+  force_sensor_left:
+    device_id: 53             # Modbus slave ID for left force sensor
+    read_interval: 0.06       # Read interval in seconds (0.06 = ~17Hz, 0.02 = 50Hz)
+    topic: "/force_sensor_left"
+    node_name_suffix: "left"
+    calibration_file: "force_sensor_calibration_left.json"  # Calibration config in colcon_ws/config/
+    launch_delay: 5.0         # Delay after modbus driver ready (seconds)
+    dashboard:
+      enabled: false          # Disable dashboard for left sensor (only one dashboard needed)
+      host: "0.0.0.0"
+      port: 5002
+  
+  # Web Interface Node Configuration
+  web:
+    host: "192.168.1.3"         # Web server host address (localhost or IP like 192.168.1.3)
+    port: 8090                # Web server port
+    listen_host: "0.0.0.0"    # Listen on all interfaces (for server binding)
+    sensor_topic: "/draw_wire_sensor/data"
+    force_topics:
+      right: "/force_sensor_right"
+      right_raw: "/force_sensor_right/raw"
+      left: "/force_sensor_left"
+      left_raw: "/force_sensor_left/raw"
+    launch_delay: 5.5         # Delay after modbus driver ready (seconds)
+    enabled: true             # Launch web interface
+
+    # Server and Hybrid Control Configuration
+    server_id: 0              # Server ID for hybrid control calculations
+    hybrid_params:
+      high_base: 133.7        # Base height for high position (mm)
+      middle_base: 128.7      # Base height for middle position (mm)
+      low_base: 113.7         # Base height for low position (mm)
+      step: 44.45             # Step height between server units (mm)
+
+# ============================================================================
+# AMR Robot Configuration
+# ============================================================================
+amr:
+  ip: "192.168.1.123"
+  web:
+    host: "0.0.0.0"
+    port: 5000

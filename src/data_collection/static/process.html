@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Process Data — UR15</title>
+    <style>
+        :root {
+            --bg: #1a1a2e; --card: #16213e; --accent: #0f3460;
+            --blue: #4fc3f7; --green: #66bb6a; --orange: #ffa726;
+            --red: #ef5350; --dim: #78909c; --text: #e0e0e0;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; min-height: 100vh; }
+
+        .header {
+            background: var(--card); border-bottom: 2px solid var(--accent);
+            padding: 10px 20px; display: flex; align-items: center; gap: 16px;
+        }
+        .header h1 { font-size: 16px; color: var(--blue); }
+        .header a { color: var(--dim); text-decoration: none; font-size: 13px; }
+        .header a:hover { color: var(--blue); }
+
+        .content { max-width: 1000px; margin: 20px auto; padding: 0 20px; }
+        .card {
+            background: var(--card); border: 1px solid var(--accent);
+            border-radius: 8px; padding: 16px 20px; margin-bottom: 14px;
+        }
+        .card h2 { font-size: 15px; color: var(--blue); margin-bottom: 10px; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { text-align: left; color: var(--dim); padding: 4px 8px; border-bottom: 1px solid var(--accent); font-size: 11px; text-transform: uppercase; }
+        td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        tr:hover { background: rgba(79,195,247,0.05); }
+
+        .btn {
+            padding: 8px 18px; border: none; border-radius: 5px;
+            font-size: 13px; cursor: pointer; font-weight: 600;
+        }
+        .btn-primary { background: var(--blue); color: #000; }
+        .btn-primary:hover { background: #29b6f6; }
+        .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-danger { background: var(--red); color: #fff; }
+
+        .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+        .stat-box {
+            background: var(--bg); border-radius: 6px; padding: 8px 10px; text-align: center;
+        }
+        .stat-box .label { font-size: 10px; color: var(--dim); text-transform: uppercase; }
+        .stat-box .value { font-size: 18px; font-weight: 700; color: var(--blue); font-family: 'Consolas', monospace; }
+
+        .log-area {
+            background: var(--bg); border: 1px solid var(--accent); border-radius: 5px;
+            padding: 8px; font-family: 'Consolas', monospace; font-size: 11px;
+            color: var(--dim); max-height: 200px; overflow-y: auto; white-space: pre-wrap;
+        }
+        .input-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+        .input-row label { font-size: 12px; color: var(--dim); min-width: 80px; }
+        .input-row input {
+            flex: 1; padding: 6px 8px; background: var(--bg); border: 1px solid var(--accent);
+            color: var(--text); border-radius: 4px; font-family: monospace; font-size: 12px;
+        }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; }
+        .badge-ok { background: #2e7d32; color: #fff; }
+        .badge-missing { background: #424242; color: #999; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>Process Data</h1>
+    <a href="/">&larr; Back to Dashboard</a>
+</div>
+
+<div class="content">
+    <div class="card">
+        <h2>Rosbag Episodes</h2>
+        <div id="rosbagInfo" style="color:var(--dim);font-size:12px;">Loading...</div>
+        <div id="bagList"></div>
+    </div>
+
+    <div class="card">
+        <h2>Dataset Status</h2>
+        <div class="stat-grid">
+            <div class="stat-box">
+                <div class="label">Episodes</div>
+                <div class="value" id="dsEpisodes">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="label">H5 Files</div>
+                <div class="value" id="dsH5">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="label">Videos</div>
+                <div class="value" id="dsVideos">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="label">Status</div>
+                <div class="value" id="dsStatus" style="font-size:12px;color:var(--dim);">--</div>
+            </div>
+        </div>
+        <div id="dsDir" style="font-size:11px;color:var(--dim);margin-bottom:8px;"></div>
+    </div>
+
+    <div class="card">
+        <h2>Convert</h2>
+        <div class="input-row">
+            <label>Task Name:</label>
+            <input type="text" id="taskName" value="teleop" placeholder="teleop">
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary" id="btnConvert" onclick="runConvert()">Convert All</button>
+            <button class="btn btn-danger" onclick="deleteAll()">Delete All Converted</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Log</h2>
+        <div class="log-area" id="logArea">Ready.</div>
+    </div>
+</div>
+
+<script>
+function addLog(msg) {
+    const el = document.getElementById('logArea');
+    const ts = new Date().toLocaleTimeString();
+    el.textContent += '\n[' + ts + '] ' + msg;
+    el.scrollTop = el.scrollHeight;
+}
+
+function loadStatus() {
+    fetch('/api/process/status').then(r => r.json()).then(d => {
+        // Rosbag episodes
+        const bags = d.bags || [];
+        document.getElementById('rosbagInfo').textContent =
+            d.rosbag_dir + ' \u2014 ' + bags.length + ' episodes';
+
+        const list = document.getElementById('bagList');
+        if (bags.length === 0) {
+            list.innerHTML = '<div style="color:var(--dim);font-size:12px;padding:8px;">No episodes found.</div>';
+        } else {
+            list.innerHTML = bags.map((b, i) => {
+                const status = b.converted
+                    ? '<span class="badge badge-ok">Converted</span>'
+                    : '<span class="badge badge-missing">Not converted</span>';
+                const topics = (b.topics || []).map(t =>
+                    '<span style="color:var(--dim);">' + t.name.split('/').pop() + '</span>: ' + t.count
+                ).join(', ');
+
+                let dsHtml = '';
+                if (b.converted && b.dataset) {
+                    const ds = b.dataset;
+                    const h5ds = (ds.h5_datasets || []).filter(d =>
+                        !d.name.startsWith('meta/')
+                    ).map(d =>
+                        '<span style="color:var(--blue);">' + d.name + '</span> ' + JSON.stringify(d.shape) + ' ' + d.dtype
+                    ).join('<br>');
+                    dsHtml = '<div style="margin-top:6px;padding:6px 8px;background:var(--bg);border-radius:4px;font-size:10px;">'
+                        + '<div style="color:var(--green);font-weight:600;margin-bottom:3px;">Converted Data</div>'
+                        + '<div>Frames: ' + ds.frames + ' &nbsp; H5: ' + (ds.h5_size_mb || '?') + ' MB'
+                        + (ds.has_video ? ' &nbsp; Video: ' + (ds.video_size_mb || '?') + ' MB' : ' &nbsp; <span style="color:var(--red);">No video</span>')
+                        + '</div>'
+                        + (h5ds ? '<div style="margin-top:4px;font-family:monospace;line-height:1.6;">' + h5ds + '</div>' : '')
+                        + '</div>';
+                }
+
+                return '<div style="border:1px solid var(--accent);border-radius:6px;padding:8px 12px;margin-top:6px;">'
+                    + '<div style="display:flex;justify-content:space-between;align-items:center;">'
+                    + '<span style="font-weight:600;font-size:12px;">#' + i + ' ' + b.name + '</span>'
+                    + '<span>' + status + ' <span style="color:var(--dim);font-size:11px;">' + b.size_mb + ' MB</span></span>'
+                    + '</div>'
+                    + '<div style="font-size:11px;color:var(--dim);margin-top:4px;">'
+                    + 'Duration: ' + b.duration + 's &nbsp; Messages: ' + b.total_messages
+                    + '</div>'
+                    + '<div style="font-size:11px;margin-top:2px;">'
+                    + 'Topics: ' + (topics || 'none')
+                    + '</div>'
+                    + dsHtml
+                    + '</div>';
+            }).join('');
+        }
+
+        // Dataset info
+        const ds = d.dataset || {};
+        document.getElementById('dsEpisodes').textContent = ds.episodes || 0;
+        document.getElementById('dsH5').textContent = ds.h5_files || 0;
+        document.getElementById('dsVideos').textContent = ds.videos || 0;
+        document.getElementById('dsDir').textContent = 'Path: ' + d.dataset_dir;
+        if (ds.exists) {
+            document.getElementById('dsStatus').textContent = 'Ready';
+            document.getElementById('dsStatus').style.color = 'var(--green)';
+        } else {
+            document.getElementById('dsStatus').textContent = 'Empty';
+            document.getElementById('dsStatus').style.color = 'var(--dim)';
+        }
+    }).catch(e => {
+        document.getElementById('rosbagInfo').textContent = 'Error: ' + e;
+    });
+}
+
+function runConvert() {
+    const btn = document.getElementById('btnConvert');
+    btn.disabled = true;
+    btn.textContent = 'Converting...';
+    const taskName = document.getElementById('taskName').value.trim() || 'teleop';
+    addLog('Starting conversion...');
+
+    fetch('/api/process/convert', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({task_name: taskName})
+    }).then(r => r.json()).then(d => {
+        btn.disabled = false;
+        btn.textContent = 'Convert All';
+        if (d.success) {
+            addLog('Done! Converted: ' + d.converted + ', Skipped: ' + d.skipped + ', Total: ' + d.total_episodes);
+            loadStatus();
+        } else {
+            addLog('ERROR: ' + d.error);
+        }
+    }).catch(e => {
+        btn.disabled = false;
+        btn.textContent = 'Convert All';
+        addLog('ERROR: ' + e);
+    });
+}
+
+function deleteAll() {
+    if (!confirm('Delete ALL converted data (H5, videos, episode JSONs, meta)? Rosbags will NOT be deleted.')) return;
+    addLog('Deleting converted data...');
+    fetch('/api/process/delete_all', {method: 'POST'}).then(r => r.json()).then(d => {
+        if (d.success) {
+            addLog('Deleted: ' + d.message);
+            loadStatus();
+        } else {
+            addLog('ERROR: ' + d.error);
+        }
+    }).catch(e => addLog('ERROR: ' + e));
+}
+
+loadStatus();
+</script>
+</body>
+</html>

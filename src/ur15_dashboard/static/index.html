@@ -110,8 +110,8 @@
         </div>
 
         <div class="section">
-            <div class="section-title">Current (A)</div>
-            <div id="effortDisplay" style="font-family:monospace;font-size:11px;color:#78909c;">--</div>
+            <div class="section-title">TCP Pose (FK)</div>
+            <div id="tcpDisplay" style="font-family:monospace;font-size:10px;color:#4fc3f7;white-space:pre;">--</div>
         </div>
     </div>
 
@@ -127,7 +127,9 @@
         ];
         const SHORT_NAMES = ['J1','J2','J3','J4','J5','J6'];
         const COLORS = ['#42a5f5','#66bb6a','#ffa726','#ef5350','#ab47bc','#26c6da'];
-        const JOINT_RANGE_DEG = 360; // ±180
+        // Per-joint range in degrees (from URDF limits)
+        // J1,J2: ±360, J3(elbow): ±180, J4,J5,J6: ±360
+        const JOINT_RANGE_DEG = [360, 360, 180, 360, 360, 360];
 
         // Build joint bar rows
         function buildJointRows() {
@@ -137,7 +139,8 @@
                     <div class="joint-label" style="color:${COLORS[i]}">${SHORT_NAMES[i]}</div>
                     <div class="joint-bar-bg"><div class="joint-center"></div>
                         <div class="joint-bar" id="jbar${i}" style="width:0%"></div></div>
-                    <div class="joint-val" id="jval${i}">0.0°</div></div>`;
+                    <div class="joint-val" id="jval${i}">0.0°</div>
+                    <div class="joint-val" id="jeff${i}" style="color:#78909c;width:55px;">--A</div></div>`;
             }
         }
         buildJointRows();
@@ -181,6 +184,20 @@
         const grid = new THREE.GridHelper(3, 30, 0x444466, 0x333355);
         grid.rotation.x = Math.PI / 2; scene.add(grid);
         scene.add(new THREE.AxesHelper(0.2));
+
+        // TCP coordinate frame (axes at tool0)
+        const tcpAxes = new THREE.AxesHelper(0.12);
+        tcpAxes.visible = false;
+        scene.add(tcpAxes);
+
+        // Force arrow at TCP
+        const forceArrow = new THREE.ArrowHelper(
+            new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, 0),
+            0.1, 0xff4444, 0.03, 0.02
+        );
+        forceArrow.visible = false;
+        scene.add(forceArrow);
+
         const ground = new THREE.Mesh(
             new THREE.PlaneGeometry(3, 3),
             new THREE.ShadowMaterial({ opacity: 0.3 })
@@ -215,7 +232,7 @@
         // UI update helpers
         function updateBar(idx, deg) {
             const bar = document.getElementById(`jbar${idx}`);
-            const halfRange = JOINT_RANGE_DEG / 2;
+            const halfRange = JOINT_RANGE_DEG[idx] / 2;
             const pct = Math.min(Math.abs(deg) / halfRange * 50, 50);
             bar.style.width = pct + '%';
             bar.className = 'joint-bar ' + (deg >= 0 ? 'positive' : 'negative');
@@ -224,7 +241,11 @@
         }
 
         function onState(s) {
-            for (let i = 0; i < 6; i++) updateBar(i, s.joints_deg[i]);
+            for (let i = 0; i < 6; i++) {
+                updateBar(i, s.joints_deg[i]);
+                if (s.effort && s.effort[i] !== undefined)
+                    document.getElementById(`jeff${i}`).textContent = s.effort[i].toFixed(2) + 'A';
+            }
 
             // F/T
             if (s.ft) {
@@ -232,12 +253,28 @@
                 document.getElementById('fVal').textContent = `(${f.x}, ${f.y}, ${f.z}) N`;
                 document.getElementById('tVal').textContent = `(${t.x}, ${t.y}, ${t.z}) Nm`;
                 document.getElementById('fMag').textContent = s.ft.force_mag + ' N';
-            }
 
-            // Effort / current
-            if (s.effort && s.effort.length) {
-                document.getElementById('effortDisplay').textContent =
-                    s.effort.map((e, i) => `${SHORT_NAMES[i]}: ${e.toFixed(2)}`).join('  ');
+                // Update force arrow in 3D view
+                if (s.tcp_matrix && s.ft.force_mag > 0.5) {
+                    const m = s.tcp_matrix;
+                    // TCP position
+                    const origin = new THREE.Vector3(m[0][3], m[1][3], m[2][3]);
+                    // Force in tool frame -> base frame: R @ f_tool
+                    const fx = m[0][0]*f.x + m[0][1]*f.y + m[0][2]*f.z;
+                    const fy = m[1][0]*f.x + m[1][1]*f.y + m[1][2]*f.z;
+                    const fz = m[2][0]*f.x + m[2][1]*f.y + m[2][2]*f.z;
+                    const dir = new THREE.Vector3(fx, fy, fz);
+                    const mag = dir.length();
+                    dir.normalize();
+                    // Arrow length: scale 5N = 0.1m, clamped
+                    const len = Math.min(Math.max(mag * 0.02, 0.02), 0.5);
+                    forceArrow.position.copy(origin);
+                    forceArrow.setDirection(dir);
+                    forceArrow.setLength(len, len * 0.3, len * 0.15);
+                    forceArrow.visible = true;
+                } else {
+                    forceArrow.visible = false;
+                }
             }
 
             // Rate
@@ -247,6 +284,43 @@
             if (robot && s.joints_rad) {
                 for (let i = 0; i < JOINT_NAMES.length; i++)
                     robot.setJointValue(JOINT_NAMES[i], s.joints_rad[i]);
+            }
+
+            // Update TCP axes from FK 4x4 matrix
+            if (s.tcp_matrix) {
+                const m = s.tcp_matrix;
+                tcpAxes.matrix.set(
+                    m[0][0], m[0][1], m[0][2], m[0][3],
+                    m[1][0], m[1][1], m[1][2], m[1][3],
+                    m[2][0], m[2][1], m[2][2], m[2][3],
+                    m[3][0], m[3][1], m[3][2], m[3][3]
+                );
+                tcpAxes.matrixAutoUpdate = false;
+                tcpAxes.matrixWorldNeedsUpdate = true;
+                tcpAxes.visible = true;
+
+                // Quaternion from rotation matrix
+                const R = [[m[0][0],m[0][1],m[0][2]],[m[1][0],m[1][1],m[1][2]],[m[2][0],m[2][1],m[2][2]]];
+                const tr = R[0][0]+R[1][1]+R[2][2];
+                let qx,qy,qz,qw;
+                if(tr>0){const s=2*Math.sqrt(tr+1);qw=0.25*s;qx=(R[2][1]-R[1][2])/s;qy=(R[0][2]-R[2][0])/s;qz=(R[1][0]-R[0][1])/s;}
+                else if(R[0][0]>R[1][1]&&R[0][0]>R[2][2]){const s=2*Math.sqrt(1+R[0][0]-R[1][1]-R[2][2]);qw=(R[2][1]-R[1][2])/s;qx=0.25*s;qy=(R[0][1]+R[1][0])/s;qz=(R[0][2]+R[2][0])/s;}
+                else if(R[1][1]>R[2][2]){const s=2*Math.sqrt(1+R[1][1]-R[0][0]-R[2][2]);qw=(R[0][2]-R[2][0])/s;qx=(R[0][1]+R[1][0])/s;qy=0.25*s;qz=(R[1][2]+R[2][1])/s;}
+                else{const s=2*Math.sqrt(1+R[2][2]-R[0][0]-R[1][1]);qw=(R[1][0]-R[0][1])/s;qx=(R[0][2]+R[2][0])/s;qy=(R[1][2]+R[2][1])/s;qz=0.25*s;}
+
+                // RPY (ZYX Euler) from rotation matrix
+                const sy = Math.sqrt(R[0][0]*R[0][0]+R[1][0]*R[1][0]);
+                let roll,pitch,yaw;
+                if(sy>1e-6){roll=Math.atan2(R[2][1],R[2][2]);pitch=Math.atan2(-R[2][0],sy);yaw=Math.atan2(R[1][0],R[0][0]);}
+                else{roll=Math.atan2(-R[1][2],R[1][1]);pitch=Math.atan2(-R[2][0],sy);yaw=0;}
+                const deg=v=>((v*180/Math.PI).toFixed(2));
+
+                const fmt = v => v.toFixed(4).padStart(8);
+                document.getElementById('tcpDisplay').textContent =
+                    `Pos:  (${m[0][3].toFixed(4)}, ${m[1][3].toFixed(4)}, ${m[2][3].toFixed(4)}) m\n` +
+                    `Quat: (${qx.toFixed(5)}, ${qy.toFixed(5)}, ${qz.toFixed(5)}, ${qw.toFixed(5)})\n` +
+                    `RPY:  (${deg(roll)}, ${deg(pitch)}, ${deg(yaw)})°\n` +
+                    m.map(r => r.map(fmt).join(' ')).join('\n');
             }
         }
 
