@@ -149,6 +149,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/api/process/convert":
             result = self._dashboard.run_conversion(body)
             self._json_response(result)
+        elif self.path == "/api/process/delete_all":
+            result = self._dashboard.delete_all_converted()
+            self._json_response(result)
         else:
             self.send_error(404)
 
@@ -418,34 +421,108 @@ class DataCollectionDashboard(Node):
                          os.path.join(self._default_save_path, d))])
 
     def get_process_status(self):
-        """Get status of rosbag episodes and dataset."""
+        """Get detailed status of rosbag episodes and dataset."""
+        import yaml
         from common.workspace import get_workspace_root
         ws_root = get_workspace_root()
         rosbag_dir = self._default_save_path
         dataset_dir = os.path.join(ws_root, "tmp", "dataset")
 
-        # Scan rosbag episodes
+        # Build map of converted bag names -> episode JSON data
+        converted_map = {}  # bag_name -> episode metadata dict
+        ep_json_dir = os.path.join(dataset_dir, "episode")
+        if os.path.isdir(ep_json_dir):
+            for f in os.listdir(ep_json_dir):
+                if f.endswith(".json"):
+                    try:
+                        with open(os.path.join(ep_json_dir, f)) as jf:
+                            d = json.load(jf)
+                        for ep in d.get("episodes", []):
+                            if "source_bag" in ep:
+                                converted_map[ep["source_bag"]] = {
+                                    "filename": ep.get("filename", ""),
+                                    "start_frame": ep.get("start_frame", 0),
+                                    "end_frame": ep.get("end_frame", 0),
+                                    "instruction": ep.get("instruction", []),
+                                }
+                    except Exception:
+                        pass
+
+        # Scan rosbag episodes with detailed info
         bags = []
         if os.path.isdir(rosbag_dir):
             for d in sorted(os.listdir(rosbag_dir)):
-                if d.startswith("episode_") and os.path.isdir(os.path.join(rosbag_dir, d)):
-                    # Get bag info
-                    meta_file = os.path.join(rosbag_dir, d, "metadata.yaml")
-                    size_mb = sum(
-                        os.path.getsize(os.path.join(rosbag_dir, d, f))
-                        for f in os.listdir(os.path.join(rosbag_dir, d))
-                    ) / (1024 * 1024)
-                    bags.append({"name": d, "size_mb": round(size_mb, 1)})
+                bag_path = os.path.join(rosbag_dir, d)
+                if not d.startswith("episode_") or not os.path.isdir(bag_path):
+                    continue
+                size_mb = sum(
+                    os.path.getsize(os.path.join(bag_path, f))
+                    for f in os.listdir(bag_path)
+                ) / (1024 * 1024)
+                bag_info = {
+                    "name": d,
+                    "size_mb": round(size_mb, 1),
+                    "converted": d in converted_map,
+                    "topics": [],
+                    "duration": 0,
+                    "total_messages": 0,
+                    "dataset": None,
+                }
+                # Add converted dataset details
+                if d in converted_map:
+                    ep_meta = converted_map[d]
+                    ds_detail = dict(ep_meta)
+                    ds_detail["frames"] = ep_meta.get("end_frame", 0) - ep_meta.get("start_frame", 0)
+                    # Check H5 file details
+                    h5_name = ep_meta.get("filename", "")
+                    h5_path = os.path.join(dataset_dir, "data", h5_name + ".h5")
+                    if os.path.isfile(h5_path):
+                        ds_detail["h5_size_mb"] = round(os.path.getsize(h5_path) / (1024 * 1024), 2)
+                        try:
+                            import h5py
+                            with h5py.File(h5_path, "r") as hf:
+                                datasets = []
+                                def _visit(name, obj):
+                                    if hasattr(obj, "shape"):
+                                        datasets.append({"name": name, "shape": list(obj.shape), "dtype": str(obj.dtype)})
+                                hf.visititems(_visit)
+                                ds_detail["h5_datasets"] = datasets
+                        except Exception:
+                            pass
+                    # Check video
+                    vid_path = os.path.join(dataset_dir, "video_agentview", h5_name + ".mp4")
+                    ds_detail["has_video"] = os.path.isfile(vid_path)
+                    if ds_detail["has_video"]:
+                        ds_detail["video_size_mb"] = round(os.path.getsize(vid_path) / (1024 * 1024), 2)
+                    bag_info["dataset"] = ds_detail
+                # Read metadata.yaml for topic details
+                meta_file = os.path.join(bag_path, "metadata.yaml")
+                if os.path.isfile(meta_file):
+                    try:
+                        with open(meta_file) as f:
+                            meta = yaml.safe_load(f)
+                        info = meta.get("rosbag2_bagfile_information", {})
+                        bag_info["duration"] = round(info.get("duration", {}).get("nanoseconds", 0) * 1e-9, 1)
+                        bag_info["total_messages"] = info.get("message_count", 0)
+                        for t in info.get("topics_with_message_count", []):
+                            tm = t.get("topic_metadata", {})
+                            bag_info["topics"].append({
+                                "name": tm.get("name", ""),
+                                "type": tm.get("type", ""),
+                                "count": t.get("message_count", 0),
+                            })
+                    except Exception:
+                        pass
+                bags.append(bag_info)
 
         # Scan dataset
         dataset_info = {"exists": False, "episodes": 0, "h5_files": 0, "videos": 0}
         if os.path.isdir(dataset_dir):
             dataset_info["exists"] = True
-            ep_dir = os.path.join(dataset_dir, "episode")
             data_dir = os.path.join(dataset_dir, "data")
             vid_dir = os.path.join(dataset_dir, "video_agentview")
-            if os.path.isdir(ep_dir):
-                dataset_info["episodes"] = len([f for f in os.listdir(ep_dir) if f.endswith(".json")])
+            if os.path.isdir(ep_json_dir):
+                dataset_info["episodes"] = len([f for f in os.listdir(ep_json_dir) if f.endswith(".json")])
             if os.path.isdir(data_dir):
                 dataset_info["h5_files"] = len([f for f in os.listdir(data_dir) if f.endswith(".h5")])
             if os.path.isdir(vid_dir):
@@ -479,6 +556,20 @@ class DataCollectionDashboard(Node):
 
             result = convert_all(rosbag_dir, dataset_dir, task_name)
             return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def delete_all_converted(self):
+        """Delete all converted dataset files (keeps rosbags)."""
+        import shutil
+        try:
+            from common.workspace import get_workspace_root
+            dataset_dir = os.path.join(get_workspace_root(), "tmp", "dataset")
+            if not os.path.isdir(dataset_dir):
+                return {"success": False, "error": "Dataset directory does not exist"}
+            shutil.rmtree(dataset_dir)
+            self.get_logger().info(f"Deleted dataset: {dataset_dir}")
+            return {"success": True, "message": f"Deleted {dataset_dir}"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

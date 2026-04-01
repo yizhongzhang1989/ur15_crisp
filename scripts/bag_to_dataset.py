@@ -136,19 +136,16 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
         return msgs[idx][1]
 
     # Extract data at each camera frame
-    joint_positions = np.zeros((n_steps, 6), dtype=np.float64)
-    joint_velocities = np.zeros((n_steps, 6), dtype=np.float64)
-    joint_efforts = np.zeros((n_steps, 6), dtype=np.float64)
-    tcp_poses = np.zeros((n_steps, 1, 7), dtype=np.float64)  # [x,y,z,qx,qy,qz,qw]
-    forces = np.zeros((n_steps, 3), dtype=np.float64)
-    torques_ft = np.zeros((n_steps, 3), dtype=np.float64)
-    gripper_actions = np.zeros((n_steps, 1), dtype=np.float64)
-    gripper_states = np.zeros((n_steps, 1), dtype=np.float64)
-    action_poses = np.zeros((n_steps, 1, 7), dtype=np.float64)
+    current_joint_position = np.zeros((n_steps, 6), dtype=np.float64)
+    current_joint_velocity = np.zeros((n_steps, 6), dtype=np.float64)
+    current_joint_effort = np.zeros((n_steps, 6), dtype=np.float64)
+    target_joint_position = np.zeros((n_steps, 6), dtype=np.float64)
+    target_gripper_position = np.zeros((n_steps, 1), dtype=np.float64)
+    tcp_wrench = np.zeros((n_steps, 6), dtype=np.float64)
     images = []
 
     for step, ref_ts in enumerate(ref_timestamps):
-        # Joint state
+        # Joint state (current)
         js = nearest_msg(joint_msgs, ref_ts)
         if js:
             q = [0.0] * 6
@@ -160,31 +157,26 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
                     q[idx] = js.position[i] if i < len(js.position) else 0.0
                     v[idx] = js.velocity[i] if i < len(js.velocity) else 0.0
                     e[idx] = js.effort[i] if i < len(js.effort) else 0.0
-            joint_positions[step] = q
-            joint_velocities[step] = v
-            joint_efforts[step] = e
-            # FK for TCP pose
-            pos, quat = fk_quaternion(q)
-            tcp_poses[step, 0, :3] = pos
-            tcp_poses[step, 0, 3:] = quat
+            current_joint_position[step] = q
+            current_joint_velocity[step] = v
+            current_joint_effort[step] = e
 
-        # F/T
+        # F/T wrench
         ft = nearest_msg(ft_msgs, ref_ts)
         if ft:
-            forces[step] = [ft.wrench.force.x, ft.wrench.force.y, ft.wrench.force.z]
-            torques_ft[step] = [ft.wrench.torque.x, ft.wrench.torque.y, ft.wrench.torque.z]
+            tcp_wrench[step] = [
+                ft.wrench.force.x, ft.wrench.force.y, ft.wrench.force.z,
+                ft.wrench.torque.x, ft.wrench.torque.y, ft.wrench.torque.z,
+            ]
 
-        # Leader arm (action)
+        # Leader arm (target)
         arm = nearest_msg(arm_msgs, ref_ts)
         if arm:
-            # Use leader arm as action source
-            arm_q = [arm.joint1, arm.joint2, arm.joint3, arm.joint4, arm.joint5, arm.joint6]
-            gripper_actions[step, 0] = arm.gripper / 1000.0  # normalize to [0, 1]
-            gripper_states[step, 0] = arm.gripper / 1000.0
-            # Compute target TCP pose from leader joints (approximate — uses same FK)
-            # In practice, the target comes from the teleop mapping
-            action_poses[step, 0, :3] = tcp_poses[step, 0, :3]  # use current as placeholder
-            action_poses[step, 0, 3:] = tcp_poses[step, 0, 3:]
+            target_joint_position[step] = [
+                arm.joint1, arm.joint2, arm.joint3,
+                arm.joint4, arm.joint5, arm.joint6,
+            ]
+            target_gripper_position[step, 0] = arm.gripper
 
         # Camera image
         if cam_msgs:
@@ -200,7 +192,8 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
                 images.append(img)
 
     # Create output directories
-    ep_name = f"{episode_idx:08d}-ur15_teleop__{task_name}__episode_{episode_idx}"
+    safe_task = task_name.replace(" ", "_")
+    ep_name = f"{episode_idx:08d}-ur15_teleop__{safe_task}__episode_{episode_idx}"
     os.makedirs(os.path.join(dataset_dir, "data"), exist_ok=True)
     os.makedirs(os.path.join(dataset_dir, "episode"), exist_ok=True)
     os.makedirs(os.path.join(dataset_dir, "video_agentview"), exist_ok=True)
@@ -209,34 +202,12 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
     h5_path = os.path.join(dataset_dir, "data", f"{ep_name}.h5")
     with h5py.File(h5_path, "w") as f:
         f.create_dataset("timestamps", data=np.array(timestamps_sec))
-        f.create_dataset("end_space/state/pose", data=tcp_poses)
-        f.create_dataset("end_space/action/pose", data=action_poses)
-        f.create_dataset("actuator_space/action/value", data=gripper_actions)
-        f.create_dataset("actuator_space/state/value", data=gripper_states)
-
-        # Meta
-        f.create_dataset("meta/end_space/names", data=[b"arm_end"])
-        f.create_dataset("meta/end_space/state_fields", data=[b"pose"])
-        f.create_dataset("meta/end_space/action_fields", data=[b"pose"])
-        f["meta/end_space/state_pose_reference"] = "world"
-        f["meta/end_space/action_pose_reference"] = "world"
-        f["meta/end_space/action_pose_type"] = "absolute"
-        f.create_dataset("meta/end_space/roles/end", data=[0])
-        f.create_dataset("meta/actuator_space/names", data=[b"gripper"])
-        f.create_dataset("meta/actuator_space/action_fields", data=[b"value"])
-        f.create_dataset("meta/actuator_space/state_fields", data=[b"value"])
-        f.create_dataset("meta/actuator_space/types", data=[b"position"])
-        f.create_dataset("meta/camera_space/names", data=[b"agentview"])
-        f.create_dataset("meta/camera_space/state_fields", data=[b"image"])
-        f.create_dataset("meta/camera_space/static_extrinsic", data=[0])
-        f.create_dataset("meta/camera_space/static_intrinsic", data=[1])
-
-        # Extra data not in sample but useful
-        f.create_dataset("extra/joint_positions", data=joint_positions)
-        f.create_dataset("extra/joint_velocities", data=joint_velocities)
-        f.create_dataset("extra/joint_efforts", data=joint_efforts)
-        f.create_dataset("extra/forces", data=forces)
-        f.create_dataset("extra/torques", data=torques_ft)
+        f.create_dataset("current_joint_position", data=current_joint_position)
+        f.create_dataset("current_joint_velocity", data=current_joint_velocity)
+        f.create_dataset("current_joint_effort", data=current_joint_effort)
+        f.create_dataset("target_joint_position", data=target_joint_position)
+        f.create_dataset("target_gripper_position", data=target_gripper_position)
+        f.create_dataset("TCP_wrench", data=tcp_wrench)
 
     print(f"  Wrote HDF5: {h5_path}")
 
@@ -257,7 +228,7 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
         "episode_id": f"{episode_idx:08d}-0000",
         "filename": ep_name,
         "start_frame": 0,
-        "end_frame": n_steps,
+        "end_frame": n_steps - 1,
         "instruction": [task_name],
         "label": ["ur15_teleop"],
         "source_bag": os.path.basename(bag_path),
