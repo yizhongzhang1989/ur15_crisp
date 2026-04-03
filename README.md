@@ -6,9 +6,9 @@ ROS 2 workspace for running [CRISP controllers](https://github.com/utiasDSL/cris
 
 - **Ubuntu 22.04** with **ROS 2 Humble** (`ros-humble-desktop`)
 - **UR robot driver**: `sudo apt install -y ros-humble-ur-robot-driver`
-- **16+ GB RAM** recommended (CRISP compiles heavy C++ templates; use `-j1` if RAM < 16 GB)
-- **Network**: Direct Ethernet to UR15 at `192.168.1.15` (host IP: `192.168.1.2` on same subnet)
-- **UR15 teach pendant**: "External Control" URCap installed, Host IP set to `192.168.1.2`, port `50002`
+- **Simulation dependencies** (for Gazebo mode): `sudo apt install -y ros-humble-ros-gz ros-humble-gz-ros2-control ros-humble-rosbridge-suite`
+- **8+ GB RAM** recommended (CRISP compiles heavy C++ templates; add swap or use `-j1` if RAM < 8 GB)
+- **For real robot**: Direct Ethernet to UR15 at `192.168.1.15` (host IP: `192.168.1.2`), "External Control" URCap installed
 
 ## Quick Start
 
@@ -21,11 +21,15 @@ cd ur15_crisp
 source /opt/ros/humble/setup.bash
 
 # 3. Install system dependencies
-sudo apt install -y ros-humble-ur-robot-driver ros-humble-pinocchio ros-humble-generate-parameter-library
+sudo apt install -y ros-humble-ur-robot-driver ros-humble-pinocchio \
+  ros-humble-generate-parameter-library ros-humble-ros-gz \
+  ros-humble-gz-ros2-control ros-humble-rosbridge-suite \
+  python3-pip python3-flask python3-serial
+pip3 install --upgrade "pip>=22" "setuptools>=59,<70"
 rosdep install --from-paths src --ignore-src -r -y
 
-# 4. Build (use -j1 if RAM < 16 GB to avoid OOM)
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+# 4. Build (use -j1 if RAM < 8 GB to avoid OOM)
+colcon build --symlink-install
 source install/setup.bash
 
 # 5. Install crisp_py (Python interface)
@@ -36,6 +40,13 @@ ros2 launch ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true
 
 # 7. Launch with real UR15 (see "Launching on Real Hardware" below)
 ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
+
+# 8. Or launch with simulation (see "Launching in Simulation" below)
+cd src/ur_simulator
+./launch_all.sh --control_mode effort \
+    --controllers_file $(ros2 pkg prefix ur15_bringup)/share/ur15_bringup/config/ur15_sim_controllers.yaml
+# Then in another terminal:
+ros2 launch ur15_bringup ur15_crisp_sim.launch.py
 ```
 
 ## Launching on Real Hardware
@@ -66,6 +77,78 @@ ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
 If the teach pendant is accessible, simply start the **External Control** program on the pendant, then run step 4.
 
 > **Note**: Do not run a separate `ur_dashboard_client.launch.py` at the same time as `ur15_crisp.launch.py` — the launch file already includes a dashboard client. Having two will cause an RTDE conflict (`speed_slider_mask is currently controlled by another RTDE client`).
+
+## Launching in Simulation (Gazebo)
+
+The workspace includes [ur_simulator](https://github.com/yizhongzhang1989/ur_simulator) as a submodule, providing Gazebo Ignition simulation with effort (torque) interfaces. The simulator acts as a drop-in replacement for the real robot — CRISP controllers connect to it the same way.
+
+### Step 1: Start the simulator
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+cd src/ur_simulator
+./launch_all.sh --control_mode effort \
+    --controllers_file $(ros2 pkg prefix ur15_bringup)/share/ur15_bringup/config/ur15_sim_controllers.yaml
+```
+
+This starts:
+- Gazebo Ignition (headless by default)
+- Gravity compensation node (Pinocchio-based, mimics UR firmware)
+- Web dashboard at `http://localhost:8000`
+- rosbridge WebSocket at port 9090
+
+The `--controllers_file` flag passes the CRISP controllers YAML so the simulator's controller_manager knows about CRISP controller types at startup.
+
+Edit `src/ur_simulator/config/config.yaml` to change `ur_type` (default: ur5e), ports, or enable Gazebo GUI.
+
+### Step 2: Load CRISP controllers
+
+In a separate terminal:
+
+```bash
+source install/setup.bash
+ros2 launch ur15_bringup ur15_crisp_sim.launch.py
+```
+
+This spawns CRISP broadcasters (active) and controllers (inactive) into the running simulator. The spawners exit after loading — this is normal.
+
+### Step 3: Activate a CRISP controller
+
+```bash
+# Cartesian impedance (recommended for first test)
+ros2 control switch_controllers \
+    --deactivate forward_effort_controller \
+    --activate cartesian_impedance_controller
+
+# Or joint impedance
+ros2 control switch_controllers \
+    --deactivate forward_effort_controller \
+    --activate joint_impedance_controller
+
+# Or gravity compensation (freedrive)
+ros2 control switch_controllers \
+    --deactivate forward_effort_controller \
+    --activate crisp_gravity_compensation
+```
+
+> **Sim vs Real controller names**: In simulation, the freedrive controller is named `crisp_gravity_compensation` (not `gravity_compensation`) to avoid a naming conflict with the simulator's built-in gravity compensation node. The impedance controllers use the same names in both modes.
+
+### Sim/Real differences
+
+| Aspect | Real robot | Simulation |
+|---|---|---|
+| `use_gravity_compensation` | `false` (UR firmware handles it) | `true` (Gazebo has no firmware) |
+| `use_coriolis_compensation` | `false` (UR firmware handles it) | `true` (Gazebo has no firmware) |
+| `max_delta_tau` | `0.3–0.5` (hardware safety) | `100.0` (relaxed for sim) |
+| `filter.output_torque` | `0.05–0.5` (smooth on hardware) | `1.0` (no smoothing needed) |
+| Freedrive controller | `gravity_compensation` | `crisp_gravity_compensation` |
+| Position controller | `scaled_joint_trajectory_controller` | `joint_trajectory_controller` |
+| FT sensor (`/ft_data`) | Available | Not available |
+
+These differences are handled automatically by the separate config files:
+- Real: `ur15_controllers_template.yaml`
+- Sim: `ur15_sim_controllers.yaml`
 
 ## Activating CRISP Controllers
 
@@ -356,7 +439,13 @@ ur15_crisp/
 ├── src/
 │   ├── crisp_controllers/           # [submodule] torque-based ros2_control controllers
 │   ├── crisp_py/                    # [submodule] Python API for CRISP
-│   ├── ur15_bringup/                # UR15 launch + controller config
+│   ├── ur_simulator/                # [submodule] Gazebo simulation for UR robots
+│   │   ├── src/ur_sim_config/       #   Effort mode config + gravity comp node
+│   │   ├── src/ur_simulation_gz/    #   Gazebo ros2_control plugin
+│   │   ├── src/ur_description/      #   UR URDF (uses system package, COLCON_IGNORE)
+│   │   ├── src/ur_web_dashboard/    #   Web dashboard (3D viewer, port 8000)
+│   │   └── launch_all.sh           #   One-command simulator launcher
+│   ├── ur15_bringup/                # UR15 launch + controller config (real + sim)
 │   ├── ur15_dashboard/              # 3D web dashboard for UR15 (port 8085)
 │   ├── web_control/                 # Flask web dashboard (port 8080) + gripper teleop bridge
 │   ├── data_collection/             # Data collection dashboard (port 8086)
@@ -384,6 +473,8 @@ ur15_crisp/
 |---|---|
 | Launch (mock) | `ros2 launch ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true` |
 | Launch (real) | `ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15` |
+| Launch (sim) | `cd src/ur_simulator && ./launch_all.sh --control_mode effort --controllers_file $(ros2 pkg prefix ur15_bringup)/share/ur15_bringup/config/ur15_sim_controllers.yaml` |
+| Load CRISP (sim) | `ros2 launch ur15_bringup ur15_crisp_sim.launch.py` |
 | List controllers | `ros2 control list_controllers` |
 | List HW interfaces | `ros2 control list_hardware_interfaces` |
 | Check joint states | `ros2 topic echo /joint_states --once` |
