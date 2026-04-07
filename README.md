@@ -26,6 +26,7 @@ sudo apt install -y ros-humble-ur-robot-driver ros-humble-pinocchio \
   ros-humble-gz-ros2-control ros-humble-rosbridge-suite \
   python3-pip python3-flask python3-serial
 pip3 install --upgrade "pip>=22" "setuptools>=59,<70"
+pip3 install h5py
 rosdep install --from-paths src --ignore-src -r -y
 
 # 4. Build (use -j1 if RAM < 8 GB to avoid OOM)
@@ -344,7 +345,12 @@ The workspace supports teleoperation of the UR15 using an [Alicia-D leader arm](
 ### Setup
 
 1. Connect the Alicia leader arm via USB (typically `/dev/ttyACM0`)
-2. Build the packages (first time):
+2. Enable serial device access (one-time):
+   ```bash
+   sudo usermod -aG dialout $USER
+   # Log out and back in for the group change to take effect
+   ```
+3. Build the packages (first time):
    ```bash
    colcon build --symlink-install --packages-select alicia_duo_leader_driver alicia_duo_leader_dashboard alicia_teleop
    source install/setup.bash

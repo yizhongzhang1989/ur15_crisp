@@ -79,7 +79,7 @@ rosdep install --from-paths src --ignore-src -r -y
 
 ```bash
 pip3 install --upgrade "pip>=22" "setuptools>=59,<70"
-pip3 install flask scipy numpy
+pip3 install flask scipy numpy h5py
 pip3 install src/crisp_py
 ```
 
@@ -100,7 +100,26 @@ ln -sf ur_simulator/src/ur_sim_config src/ur_sim_config
 touch src/ur_simulator/COLCON_IGNORE
 ```
 
-### Step 6: Build
+### Step 6: Enable serial devices (for leader arm / gripper)
+
+USB serial devices (e.g. Alicia leader arm, Robotiq gripper) appear as `/dev/ttyACM0`.
+The device is owned by the `dialout` group. Add the current user to it:
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+Verify:
+
+```bash
+groups $USER          # Should include 'dialout'
+ls -la /dev/ttyACM0   # Should show group 'dialout', crw-rw----
+```
+
+**Note**: The group change requires logging out and back in (or `newgrp dialout`)
+to take effect in existing terminal sessions.
+
+### Step 7: Build
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -116,7 +135,7 @@ source install/setup.bash
 
 Build takes 2-5 minutes with 8+ GB RAM.
 
-### Step 7: Verify build
+### Step 8: Verify build
 
 ```bash
 source install/setup.bash

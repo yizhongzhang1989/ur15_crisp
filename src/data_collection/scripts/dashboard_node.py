@@ -110,6 +110,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/api/process/status":
             result = self._dashboard.get_process_status()
             self._json_response(result)
+        elif self.path == "/api/process/convert_status":
+            result = self._dashboard.get_convert_status()
+            self._json_response(result)
         elif self.path.startswith("/robot/") or self.path.startswith("/vendor/"):
             # Serve URDF, meshes, and JS vendor files from ur15_dashboard
             rel_path = self.path.lstrip("/")
@@ -215,6 +218,13 @@ class DataCollectionDashboard(Node):
         self._replay_thread = None
         self._replay_stop_event = threading.Event()
         self._arm_pub = None
+
+        # Conversion state
+        self._converting = False
+        self._convert_lock = threading.Lock()
+        self._convert_episode_status = {}  # bag_name -> {status, detail, timestamp}
+        self._convert_result = None
+        self._convert_thread = None
 
         # Recording state
         self._recording = False
@@ -540,7 +550,9 @@ class DataCollectionDashboard(Node):
         }
 
     def run_conversion(self, params):
-        """Run bag-to-dataset conversion."""
+        """Start bag-to-dataset conversion in a background thread."""
+        if self._converting:
+            return {"success": False, "error": "Conversion already in progress"}
         try:
             import sys
             from common.workspace import get_workspace_root
@@ -548,16 +560,78 @@ class DataCollectionDashboard(Node):
             scripts_dir = os.path.join(ws_root, "scripts")
             if scripts_dir not in sys.path:
                 sys.path.insert(0, scripts_dir)
-            from bag_to_dataset import convert_all
 
             rosbag_dir = params.get("rosbag_dir", self._default_save_path)
             dataset_dir = params.get("dataset_dir", os.path.join(ws_root, "tmp", "dataset"))
             task_name = params.get("task_name", "teleop")
+            num_threads = int(params.get("num_threads", 16))
 
-            result = convert_all(rosbag_dir, dataset_dir, task_name)
-            return result
+            with self._convert_lock:
+                self._converting = True
+                self._convert_episode_status = {}
+                self._convert_result = None
+
+            self._convert_thread = threading.Thread(
+                target=self._conversion_worker,
+                args=(rosbag_dir, dataset_dir, task_name, num_threads),
+                daemon=True,
+            )
+            self._convert_thread.start()
+            self.get_logger().info(
+                f"Conversion started: {rosbag_dir} -> {dataset_dir} "
+                f"(task={task_name}, threads={num_threads})"
+            )
+            return {"success": True, "message": "Conversion started", "num_threads": num_threads}
         except Exception as e:
+            self._converting = False
             return {"success": False, "error": str(e)}
+
+    def _conversion_worker(self, rosbag_dir, dataset_dir, task_name, num_threads):
+        """Background worker that runs the conversion."""
+        try:
+            from bag_to_dataset import convert_all
+
+            def _status_cb(bag_name, status, detail):
+                with self._convert_lock:
+                    self._convert_episode_status[bag_name] = {
+                        "status": status,
+                        "detail": str(detail) if detail and not isinstance(detail, dict) else detail,
+                        "timestamp": time.time(),
+                    }
+                self.get_logger().info(f"Episode {bag_name}: {status}")
+
+            result = convert_all(
+                rosbag_dir, dataset_dir, task_name,
+                num_threads=num_threads,
+                status_callback=_status_cb,
+            )
+            with self._convert_lock:
+                self._convert_result = result
+                self._converting = False
+            self.get_logger().info(
+                f"Conversion finished: {result.get('converted', 0)} converted, "
+                f"{result.get('skipped', 0)} skipped, {result.get('errors', 0)} errors"
+            )
+        except Exception as e:
+            with self._convert_lock:
+                self._convert_result = {"success": False, "error": str(e)}
+                self._converting = False
+            self.get_logger().error(f"Conversion failed: {e}")
+
+    def get_convert_status(self):
+        """Return current conversion progress for polling."""
+        with self._convert_lock:
+            episodes = {}
+            for bag_name, info in self._convert_episode_status.items():
+                episodes[bag_name] = {
+                    "status": info["status"],
+                    "timestamp": info.get("timestamp", 0),
+                }
+            return {
+                "converting": self._converting,
+                "episodes": episodes,
+                "result": self._convert_result,
+            }
 
     def delete_all_converted(self):
         """Delete all converted dataset files (keeps rosbags)."""
