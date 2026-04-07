@@ -10,6 +10,11 @@
   <depend>ur_robot_driver</depend>
   <depend>crisp_controllers</depend>
   <exec_depend>common</exec_depend>
+  <exec_depend>ur_sim_config</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ur_description</exec_depend>
+  <exec_depend>rosbridge_server</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
