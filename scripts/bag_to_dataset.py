@@ -32,6 +32,12 @@ except ImportError:
 
 from ur15_dashboard.kinematics import forward_kinematics, fk_quaternion
 
+
+class ConversionCancelled(Exception):
+    """Raised when conversion is cancelled by the user."""
+    pass
+
+
 JOINT_NAMES = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
     "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
@@ -79,7 +85,22 @@ def _open_bag_reader(bag_path):
     return reader, topic_types
 
 
-def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
+def _get_bag_message_count(bag_path):
+    """Get total message count from bag metadata (fast, no deserialization)."""
+    import yaml
+    meta_file = os.path.join(bag_path, "metadata.yaml")
+    if os.path.isfile(meta_file):
+        try:
+            with open(meta_file) as f:
+                meta = yaml.safe_load(f)
+            return meta.get("rosbag2_bagfile_information", {}).get("message_count", 0)
+        except Exception:
+            pass
+    return 0
+
+
+def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop",
+                    cancel_event=None, progress_callback=None):
     """
     Convert a single rosbag episode to dataset format (memory-efficient).
 
@@ -92,10 +113,28 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
         dataset_dir: Output dataset directory
         episode_idx: Episode index number
         task_name: Task description string
+        cancel_event: Optional threading.Event; if set, raises ConversionCancelled
+        progress_callback: Optional callable(stage, total_stages, percent)
+            stage: current stage (1-based)
+            total_stages: total number of stages (3)
+            percent: 0-100 progress within current stage
 
     Returns:
         dict: Episode metadata
+
+    Raises:
+        ConversionCancelled: If cancel_event is set during conversion.
     """
+    TOTAL_STAGES = 3
+
+    def _check_cancel():
+        if cancel_event and cancel_event.is_set():
+            raise ConversionCancelled(f"Episode {episode_idx} cancelled")
+
+    def _report(stage, pct):
+        if progress_callback:
+            progress_callback(stage, TOTAL_STAGES, min(int(pct), 100))
+
     cam_topic = "/ur15_camera/image_raw"
     joint_topic = "/joint_states"
     ft_topic = "/force_torque_sensor_broadcaster/wrench"
@@ -103,6 +142,8 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
 
     # ── Pass 1: read lightweight data + camera timestamps ──
     print(f"  [{episode_idx}] Pass 1 (metadata): {bag_path}")
+    total_msgs = _get_bag_message_count(bag_path)
+    _report(1, 0)
     reader, topic_types = _open_bag_reader(bag_path)
 
     # Lightweight storage: timestamps + extracted scalars only
@@ -114,8 +155,14 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
     arm_ts = []
     arm_data = []                # list of (j1..j6, gripper) tuples
 
+    msg_count = 0
     while reader.has_next():
         topic, data, timestamp = reader.read_next()
+        msg_count += 1
+        if msg_count % 500 == 0:
+            _check_cancel()
+            if total_msgs > 0:
+                _report(1, msg_count * 100 / total_msgs)
         if topic == cam_topic:
             cam_timestamps.append(timestamp)
         elif topic == joint_topic:
@@ -145,6 +192,7 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
                 msg.gripper,
             ))
     del reader  # free reader resources
+    _report(1, 100)
 
     if not cam_timestamps:
         print(f"  [{episode_idx}] WARNING: No camera messages on {cam_topic}")
@@ -188,6 +236,9 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
     # Free lightweight data now that arrays are built
     del joint_ts, joint_data, ft_ts, ft_data, arm_ts, arm_data
 
+    _check_cancel()
+    _report(2, 0)
+
     # ── Write HDF5 ──
     safe_task = task_name.replace(" ", "_")
     ep_name = f"{episode_idx:08d}-ur15_teleop__{safe_task}__episode_{episode_idx}"
@@ -208,9 +259,12 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
     del target_joint_position, target_gripper_position, tcp_wrench
 
     print(f"  [{episode_idx}] Wrote HDF5: {h5_path}")
+    _report(2, 100)
 
     # ── Pass 2: stream camera images directly to video writer ──
     vid_path = os.path.join(dataset_dir, "video_agentview", f"{ep_name}.mp4")
+    total_cam_frames = len(cam_timestamps)
+    _report(3, 0)
     if cam_timestamps:
         print(f"  [{episode_idx}] Pass 2 (video): streaming {len(cam_timestamps)} frames")
         fps = n_steps / max(timestamps_sec[-1], 0.1)
@@ -222,6 +276,10 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
 
         frame_count = 0
         while reader2.has_next():
+            if frame_count % 50 == 0:
+                _check_cancel()
+                if total_cam_frames > 0:
+                    _report(3, frame_count * 100 / total_cam_frames)
             topic, data, timestamp = reader2.read_next()
             msg = deserialize_message(data, _get_msg_class(topic_types2[topic]))
             h, w = msg.height, msg.width
@@ -241,6 +299,7 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
             writer.release()
         del reader2
         print(f"  [{episode_idx}] Wrote video: {vid_path} ({frame_count} frames, {fps:.1f} fps)")
+    _report(3, 100)
 
     # Episode metadata
     ep_meta = {
@@ -285,7 +344,7 @@ def create_dataset_meta(dataset_dir, episodes_meta):
 
 
 def convert_all(rosbag_dir, dataset_dir, task_name="teleop", num_threads=1,
-                status_callback=None):
+                status_callback=None, cancel_event=None):
     """Convert all episodes in rosbag_dir to dataset format.
 
     Args:
@@ -295,6 +354,7 @@ def convert_all(rosbag_dir, dataset_dir, task_name="teleop", num_threads=1,
         num_threads: Number of parallel conversion threads (default 1)
         status_callback: Optional callable(bag_name, status, detail) where
             status is 'converting', 'converted', or 'error'
+        cancel_event: Optional threading.Event; if set, conversion stops ASAP
 
     Returns:
         dict with conversion results
@@ -343,14 +403,31 @@ def convert_all(rosbag_dir, dataset_dir, task_name="teleop", num_threads=1,
 
     def _convert_one(args):
         idx, bag_name = args
+        if cancel_event and cancel_event.is_set():
+            if status_callback:
+                status_callback(bag_name, "cancelled", None)
+            return bag_name, None, "cancelled"
         bag_path = os.path.join(rosbag_dir, bag_name)
         if status_callback:
-            status_callback(bag_name, "converting", None)
+            status_callback(bag_name, "converting", {"stage": 1, "total_stages": 3, "percent": 0})
+
+        def _progress_cb(stage, total_stages, percent):
+            if status_callback:
+                status_callback(bag_name, "converting", {
+                    "stage": stage, "total_stages": total_stages, "percent": percent,
+                })
+
         try:
-            meta = convert_episode(bag_path, dataset_dir, idx, task_name)
+            meta = convert_episode(bag_path, dataset_dir, idx, task_name,
+                                   cancel_event=cancel_event,
+                                   progress_callback=_progress_cb)
             if status_callback:
                 status_callback(bag_name, "converted", meta)
             return bag_name, meta, None
+        except ConversionCancelled:
+            if status_callback:
+                status_callback(bag_name, "cancelled", None)
+            return bag_name, None, "cancelled"
         except Exception as e:
             if status_callback:
                 status_callback(bag_name, "error", str(e))
@@ -362,24 +439,34 @@ def convert_all(rosbag_dir, dataset_dir, task_name="teleop", num_threads=1,
     if effective_threads == 1:
         # Single-threaded (original behavior)
         for args in to_convert:
+            if cancel_event and cancel_event.is_set():
+                break
             bag_name, meta, err = _convert_one(args)
             if err:
-                print(f"  ERROR converting {bag_name}: {err}")
-                errors += 1
+                if err != "cancelled":
+                    print(f"  ERROR converting {bag_name}: {err}")
+                    errors += 1
             elif meta:
                 all_meta.append(meta)
                 converted += 1
     else:
-        with ThreadPoolExecutor(max_workers=effective_threads) as executor:
-            futures = {executor.submit(_convert_one, args): args for args in to_convert}
+        executor = ThreadPoolExecutor(max_workers=effective_threads)
+        futures = {executor.submit(_convert_one, args): args for args in to_convert}
+        try:
             for future in as_completed(futures):
                 bag_name, meta, err = future.result()
                 if err:
-                    print(f"  ERROR converting {bag_name}: {err}")
-                    errors += 1
+                    if err != "cancelled":
+                        print(f"  ERROR converting {bag_name}: {err}")
+                        errors += 1
                 elif meta:
                     all_meta.append(meta)
                     converted += 1
+                if cancel_event and cancel_event.is_set():
+                    break
+        finally:
+            # cancel_futures=True (Python 3.9+) immediately cancels queued work
+            executor.shutdown(wait=False, cancel_futures=True)
 
     # Rebuild full episode index
     all_episodes = []

@@ -117,7 +117,8 @@
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
             <button class="btn btn-primary" id="btnConvert" onclick="runConvert()">Convert All</button>
-            <button class="btn btn-danger" onclick="deleteAll()">Delete All Converted</button>
+            <button class="btn btn-danger" id="btnStop" onclick="stopConvert()" style="display:none;">Stop</button>
+            <button class="btn btn-danger" id="btnDeleteAll" onclick="deleteAll()">Delete All Converted</button>
             <span id="convertProgress" style="font-size:12px;color:var(--dim);margin-left:8px;"></span>
         </div>
     </div>
@@ -130,7 +131,8 @@
 
 <script>
 let convertPollTimer = null;
-let convertEpisodeStatus = {};  // bag_name -> status
+let convertEpisodeStatus = {};  // bag_name -> {status, stage, total_stages, percent}
+let cachedBags = [];  // cached bag list from last full loadStatus()
 
 function addLog(msg) {
     const el = document.getElementById('logArea');
@@ -141,14 +143,25 @@ function addLog(msg) {
 
 function getEpisodeBadge(bagName, isConverted) {
     // Check live conversion status first
-    const liveStatus = convertEpisodeStatus[bagName];
-    if (liveStatus === 'converting') {
-        return '<span class="badge badge-converting">Converting...</span>';
-    } else if (liveStatus === 'error') {
+    const live = convertEpisodeStatus[bagName];
+    if (!live) {
+        if (isConverted) return '<span class="badge badge-ok">Converted</span>';
+        return '<span class="badge badge-missing">Not converted</span>';
+    }
+    const st = live.status;
+    if (st === 'converting') {
+        let label = 'Converting...';
+        if (live.stage && live.total_stages) {
+            label = `Stage ${live.stage}/${live.total_stages} ${live.percent || 0}%`;
+        }
+        return '<span class="badge badge-converting">' + label + '</span>';
+    } else if (st === 'error') {
         return '<span class="badge badge-error">Error</span>';
-    } else if (liveStatus === 'converted' || isConverted) {
+    } else if (st === 'cancelled') {
+        return '<span class="badge badge-missing">Cancelled</span>';
+    } else if (st === 'converted' || isConverted) {
         return '<span class="badge badge-ok">Converted</span>';
-    } else if (liveStatus === 'skipped') {
+    } else if (st === 'skipped') {
         return '<span class="badge badge-skipped">Skipped</span>';
     }
     return '<span class="badge badge-missing">Not converted</span>';
@@ -158,6 +171,7 @@ function loadStatus() {
     fetch('/api/process/status').then(r => r.json()).then(d => {
         // Rosbag episodes
         const bags = d.bags || [];
+        cachedBags = bags;
         document.getElementById('rosbagInfo').textContent =
             d.rosbag_dir + ' \u2014 ' + bags.length + ' episodes';
 
@@ -234,14 +248,17 @@ function pollConvertStatus() {
         // Update live status map and count
         for (const [name, info] of Object.entries(episodes)) {
             const prev = convertEpisodeStatus[name];
-            if (prev !== info.status) {
-                convertEpisodeStatus[name] = info.status;
-                if (info.status === 'converting') {
+            const prevStatus = prev ? prev.status : null;
+            convertEpisodeStatus[name] = info;
+            if (prevStatus !== info.status) {
+                if (info.status === 'converting' && !prevStatus) {
                     addLog('Converting: ' + name);
                 } else if (info.status === 'converted') {
                     addLog('Converted: ' + name);
                 } else if (info.status === 'error') {
                     addLog('ERROR: ' + name);
+                } else if (info.status === 'cancelled') {
+                    addLog('Cancelled: ' + name);
                 }
             }
             if (info.status === 'converting') converting++;
@@ -256,15 +273,19 @@ function pollConvertStatus() {
             ? `Progress: ${converted}/${total} done, ${converting} active, ${errors} errors`
             : '';
 
-        // Re-render bag list with updated badges
-        loadBagListOnly();
+        // Re-render bag list from cache with updated live badges (no server fetch)
+        renderBagList(cachedBags);
 
         if (!d.converting && convertPollTimer) {
             clearInterval(convertPollTimer);
             convertPollTimer = null;
             const btn = document.getElementById('btnConvert');
+            const btnStop = document.getElementById('btnStop');
             btn.disabled = false;
             btn.textContent = 'Convert All';
+            btnStop.style.display = 'none';
+            btnStop.disabled = false;
+            btnStop.textContent = 'Stop';
             if (d.result) {
                 if (d.result.success) {
                     addLog('Conversion complete! Converted: ' + (d.result.converted || 0)
@@ -281,16 +302,12 @@ function pollConvertStatus() {
     }).catch(() => {});
 }
 
-function loadBagListOnly() {
-    fetch('/api/process/status').then(r => r.json()).then(d => {
-        renderBagList(d.bags || []);
-    }).catch(() => {});
-}
-
 function runConvert() {
     const btn = document.getElementById('btnConvert');
+    const btnStop = document.getElementById('btnStop');
     btn.disabled = true;
     btn.textContent = 'Converting...';
+    btnStop.style.display = '';
     const taskName = document.getElementById('taskName').value.trim() || 'teleop';
     const numThreads = parseInt(document.getElementById('numThreads').value) || 16;
     convertEpisodeStatus = {};
@@ -309,13 +326,29 @@ function runConvert() {
         } else {
             btn.disabled = false;
             btn.textContent = 'Convert All';
+            btnStop.style.display = 'none';
             addLog('ERROR: ' + d.error);
         }
     }).catch(e => {
         btn.disabled = false;
         btn.textContent = 'Convert All';
+        btnStop.style.display = 'none';
         addLog('ERROR: ' + e);
     });
+}
+
+function stopConvert() {
+    const btnStop = document.getElementById('btnStop');
+    btnStop.disabled = true;
+    btnStop.textContent = 'Stopping...';
+    addLog('Stopping conversion...');
+    fetch('/api/process/convert/stop', {method: 'POST'}).then(r => r.json()).then(d => {
+        if (d.success) {
+            addLog('Stop requested — cleaning up incomplete files...');
+        } else {
+            addLog('Stop error: ' + (d.error || 'unknown'));
+        }
+    }).catch(e => addLog('Stop error: ' + e));
 }
 
 function deleteAll() {
