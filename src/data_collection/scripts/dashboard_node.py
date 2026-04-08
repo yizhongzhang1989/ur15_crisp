@@ -110,6 +110,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/api/process/status":
             result = self._dashboard.get_process_status()
             self._json_response(result)
+        elif self.path == "/api/process/status_lite":
+            result = self._dashboard.get_process_status_lite()
+            self._json_response(result)
         elif self.path == "/api/process/convert_status":
             result = self._dashboard.get_convert_status()
             self._json_response(result)
@@ -437,6 +440,40 @@ class DataCollectionDashboard(Node):
         return len([d for d in os.listdir(self._default_save_path)
                      if d.startswith("episode_") and os.path.isdir(
                          os.path.join(self._default_save_path, d))])
+
+    def get_process_status_lite(self):
+        """Fast status: bag names + sizes only, no YAML/JSON/H5 parsing."""
+        rosbag_dir = self._default_save_path
+        from common.workspace import get_workspace_root
+        dataset_dir = os.path.join(get_workspace_root(), "tmp", "dataset")
+        bags = []
+        if os.path.isdir(rosbag_dir):
+            for d in sorted(os.listdir(rosbag_dir)):
+                bag_path = os.path.join(rosbag_dir, d)
+                if not d.startswith("episode_") or not os.path.isdir(bag_path):
+                    continue
+                try:
+                    size_mb = sum(
+                        os.path.getsize(os.path.join(bag_path, f))
+                        for f in os.listdir(bag_path)
+                    ) / (1024 * 1024)
+                except OSError:
+                    size_mb = 0
+                bags.append({
+                    "name": d,
+                    "size_mb": round(size_mb, 1),
+                    "converted": False,
+                    "topics": [],
+                    "duration": 0,
+                    "total_messages": 0,
+                    "dataset": None,
+                })
+        return {
+            "rosbag_dir": rosbag_dir,
+            "dataset_dir": dataset_dir,
+            "bags": bags,
+            "dataset": {"exists": os.path.isdir(dataset_dir), "episodes": 0, "h5_files": 0, "videos": 0},
+        }
 
     def get_process_status(self):
         """Get detailed status of rosbag episodes and dataset."""

@@ -365,7 +365,50 @@ function deleteAll() {
     }).catch(e => addLog('ERROR: ' + e));
 }
 
-loadStatus();
+// On page load: check conversion first (fast in-memory endpoint), then load bags
+function initPage() {
+    // Step 1: fast check if conversion is running (in-memory, no disk I/O)
+    fetch('/api/process/convert_status').then(r => r.json()).then(d => {
+        if (d.converting) {
+            const episodes = d.episodes || {};
+            for (const [name, info] of Object.entries(episodes)) {
+                convertEpisodeStatus[name] = info;
+            }
+            document.getElementById('btnConvert').disabled = true;
+            document.getElementById('btnConvert').textContent = 'Converting...';
+            document.getElementById('btnStop').style.display = '';
+            addLog('Conversion in progress (resumed view)');
+            if (!convertPollTimer) {
+                convertPollTimer = setInterval(pollConvertStatus, 1000);
+            }
+            // During conversion, build bag list from convert_status episodes
+            // (avoid disk-heavy /api/process/status entirely)
+            const bagNames = Object.keys(episodes).sort();
+            cachedBags = bagNames.map(name => ({
+                name: name,
+                size_mb: 0,
+                converted: false,
+                topics: [],
+                duration: 0,
+                total_messages: 0,
+                dataset: null,
+            }));
+            document.getElementById('rosbagInfo').textContent =
+                bagNames.length + ' episodes (loading details after conversion...)';
+            document.getElementById('dsStatus').textContent = 'Converting';
+            document.getElementById('dsStatus').style.color = 'var(--orange)';
+            renderBagList(cachedBags);
+        } else {
+            // Not converting — safe to load full status
+            loadStatus();
+        }
+    }).catch(() => {
+        // Fallback: try full status
+        loadStatus();
+    });
+}
+
+initPage();
 </script>
 </body>
 </html>
