@@ -87,18 +87,24 @@ Note: setuptools must be `>=59,<70` — versions >=70 break colcon's `--symlink-
 on Ubuntu 22.04. The pip upgrade is required so `pyproject.toml` is parsed correctly
 (the default Ubuntu 22.04 pip installs `crisp_py` as `UNKNOWN`).
 
-### Step 5: Handle ur_simulator submodule
+### Step 5: Set up ur_simulator (for simulation only)
 
-The ur_simulator submodule contains its own nested submodules and packages.
-Only `ur_sim_config` needs to be built from source — the rest use system packages.
+The simulator is a **separate workspace** — not a submodule. Clone and build it
+independently:
 
 ```bash
-# Create symlink so colcon finds ur_sim_config
-ln -sf ur_simulator/src/ur_sim_config src/ur_sim_config
-
-# Prevent colcon from scanning inside ur_simulator (uses system packages)
-touch src/ur_simulator/COLCON_IGNORE
+cd ~/Documents
+git clone --recurse-submodules https://github.com/yizhongzhang1989/ur_simulator.git
+cd ur_simulator
+sudo apt install -y ros-humble-ros-gz ros-humble-gz-ros2-control \
+  ros-humble-rosbridge-suite ros-humble-pinocchio ros-humble-ur-description
+source /opt/ros/humble/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install
 ```
+
+See the [ur_simulator README](https://github.com/yizhongzhang1989/ur_simulator) for
+full setup details. Skip this step if only using real hardware.
 
 ### Step 6: Enable serial devices (for leader arm / gripper)
 
@@ -163,17 +169,31 @@ Expected packages:
 
 ### Mode A: Simulation (no real robot needed)
 
-**Terminal 1 — Launch everything:**
+**Terminal 1 — Start simulator (separate workspace):**
 
 ```bash
+cd ~/Documents/ur_simulator
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+./launch_all.sh \
+    --controllers_file ~/Documents/ur15_crisp/install/ur15_bringup/share/ur15_bringup/config/ur15_sim_controllers.yaml
+```
+
+This starts MuJoCo simulation (headless), gravity compensation, web dashboard
+(port 8000), and rosbridge (port 9090). MuJoCo always exposes effort interfaces —
+no `--control_mode` flag needed.
+
+Edit `src/ur_simulator/config/config.yaml` to change `ur_type` (default: ur5e).
+
+**Terminal 2 — Load CRISP controllers (from ur15_crisp workspace):**
+
+```bash
+cd ~/Documents/ur15_crisp
 source install/setup.bash
 ros2 launch ur15_bringup ur15_crisp_sim.launch.py
 ```
 
-This starts Gazebo (headless), gravity compensation, and loads CRISP controllers.
-CRISP broadcasters are active; CRISP controllers are inactive.
-
-Arguments: `ur_type:=ur15` (default), `gazebo_gui:=true`, `launch_rviz:=true`
+Spawns CRISP broadcasters (active) and controllers (inactive). Spawners exit after loading — this is normal.
 
 **Terminal 2 — Activate a controller:**
 
@@ -189,7 +209,7 @@ ros2 control switch_controllers \
     --activate cartesian_impedance_controller
 ```
 
-**Terminal 2 — Launch web_control dashboard (optional):**
+**Terminal 3 — Launch web_control dashboard (optional):**
 
 ```bash
 source install/setup.bash
@@ -201,8 +221,9 @@ Open `http://localhost:8080` for the robot control dashboard.
 **Important simulation notes:**
 - Controller names differ from real robot: use `crisp_gravity_compensation` (not `gravity_compensation`)
 - The sim's `gravity_compensation.py` node occupies the name `gravity_compensation`
-- `use_gravity_compensation` and `use_coriolis_compensation` are `true` in sim (Gazebo has no firmware compensation)
+- `use_gravity_compensation` and `use_coriolis_compensation` are `true` in sim (sim has no firmware compensation)
 - `max_delta_tau` and `filter.output_torque` are relaxed in sim config (no hardware safety concern)
+- To use Gazebo instead of MuJoCo: add `--simulator gazebo --control_mode effort`
 
 ### Mode B: Real robot
 

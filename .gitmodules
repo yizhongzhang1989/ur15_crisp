@@ -13,6 +13,3 @@
 	path = src/alicia_leader
 	url = https://github.com/yizhongzhang1989/Alicia-D-Leader-ROS.git
 	shallow = true
-[submodule "src/ur_simulator"]
-	path = src/ur_simulator
-	url = https://github.com/yizhongzhang1989/ur_simulator.git
