@@ -5,6 +5,7 @@ monitoring robot status, and commanding motion.
 """
 
 import json
+import math
 import os
 import shutil
 import threading
@@ -16,7 +17,7 @@ import rclpy
 import yaml
 from flask import Flask, Response, jsonify, request, send_from_directory
 from sensor_msgs.msg import JointState
-from std_msgs.msg import UInt8
+from std_msgs.msg import UInt8, Float64MultiArray
 from geometry_msgs.msg import WrenchStamped
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -123,6 +124,25 @@ class WebControlServer:
                 callback_group=ReentrantCallbackGroup(),
             )
 
+        # Joint command target pipeline: raw → smooth → controllers
+        self._cmd_target_pub = self.robot.node.create_publisher(
+            JointState, "/cmd_target_joint", 10
+        )
+        self._cmd_target_smooth_pub = self.robot.node.create_publisher(
+            JointState, "/cmd_target_joint_smooth", 10
+        )
+        self._fwd_pos_pub = self.robot.node.create_publisher(
+            Float64MultiArray, "/forward_position_controller/commands", 10
+        )
+        self._cmd_target_raw = None     # latest raw target (set by API/teleop)
+        self._cmd_target_smooth = None  # last smoothed output
+        self._raw_history = []          # last N raw frames for smoothing
+        self._raw_history_max = 10
+        # 250 Hz timer to continuously publish raw + smooth and feed controllers
+        self._cmd_pub_timer = self.robot.node.create_timer(
+            0.004, self._cmd_pub_timer_cb, callback_group=ReentrantCallbackGroup()
+        )
+
         # Publisher for gripper servo control
         self._gripper_pub = self.robot.node.create_publisher(UInt8, "/gripper/target_position", 10)
         # Timer at 5 Hz for gripper level control
@@ -161,7 +181,8 @@ class WebControlServer:
                 "pos": [round(float(v), 5) for v in pos],
                 "eff": [round(float(v), 3) for v in eff],
                 "cmd": [round(float(v), 4) for v in self._commanded_torques] if self._commanded_torques is not None else [],
-                "tgt": [round(float(v), 5) for v in self._target_joints] if self._target_joints is not None else [],
+                "tgt_raw": [round(float(v), 5) for v in self._cmd_target_raw] if self._cmd_target_raw is not None else [],
+                "tgt_smooth": [round(float(v), 5) for v in self._cmd_target_smooth] if self._cmd_target_smooth is not None else [],
             }
             with self._plot_lock:
                 self._plot_buffer.append(sample)
@@ -198,7 +219,7 @@ class WebControlServer:
         self._gripper_raw = float(msg.gripper)
         if self._alicia_teleop and self._ready:
             target = self._alicia_joints * self._alicia_scale + self._alicia_offset
-            self.robot.set_target_joint(target)
+            self._set_cmd_target(target)
 
     def _gripper_timer_cb(self):
         """Send gripper command at 5 Hz when teleop is active, with 25-level hysteresis."""
@@ -228,6 +249,59 @@ class WebControlServer:
         gripper_msg = UInt8()
         gripper_msg.data = pos
         self._gripper_pub.publish(gripper_msg)
+
+    def _cmd_target_raw_cb(self, msg: JointState):
+        """Receive raw target joints from /cmd_target_joint."""
+        names = self.robot.config.joint_names
+        targets = [0.0] * len(names)
+        for jname, pos in zip(msg.name, msg.position):
+            if jname in names:
+                targets[names.index(jname)] = pos
+        self._cmd_target_raw = targets
+
+    def _cmd_pub_timer_cb(self):
+        """Continuously publish raw, smooth, and feed controllers at 250 Hz."""
+        if not rclpy.ok():
+            return
+        stamp = self.robot.node.get_clock().now().to_msg()
+        raw = self._cmd_target_raw
+        if raw is not None:
+            raw_msg = JointState()
+            raw_msg.header.stamp = stamp
+            raw_msg.name = self.robot.config.joint_names
+            raw_msg.position = [float(j) for j in raw]
+            self._cmd_target_pub.publish(raw_msg)
+            # Record every published frame for smoothing
+            self._raw_history.append(list(raw))
+            if len(self._raw_history) > self._raw_history_max:
+                self._raw_history.pop(0)
+            self._compute_smooth()
+        smooth = self._cmd_target_smooth
+        if smooth is not None:
+            smooth_msg = JointState()
+            smooth_msg.header.stamp = stamp
+            smooth_msg.name = self.robot.config.joint_names
+            smooth_msg.position = list(smooth)
+            self._cmd_target_smooth_pub.publish(smooth_msg)
+            self.robot.set_target_joint(np.array(smooth))
+            fwd_msg = Float64MultiArray()
+            fwd_msg.data = list(smooth)
+            self._fwd_pos_pub.publish(fwd_msg)
+
+    def _set_cmd_target(self, joints):
+        """Set raw joint target (smoothing computed by timer)."""
+        self._cmd_target_raw = [float(j) for j in joints]
+
+    def _compute_smooth(self):
+        """Average the last N raw frames."""
+        if not self._raw_history:
+            return
+        n = len(self._raw_history)
+        nj = len(self._raw_history[0])
+        smooth = [0.0] * nj
+        for j in range(nj):
+            smooth[j] = sum(self._raw_history[k][j] for k in range(n)) / n
+        self._cmd_target_smooth = smooth
 
     def _wait_for_robot(self):
         try:
@@ -399,7 +473,21 @@ class WebControlServer:
             data = request.get_json()
             try:
                 joints = np.array(data["joints"], dtype=float)
-                self.robot.set_target_joint(joints)
+                self._set_cmd_target(joints)
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/set_position_joint", methods=["POST"])
+        def set_position_joint():
+            """Send joint positions via cmd_target_joint pipeline.
+            Body: {"joints": [q1, ..., q6]}"""
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json()
+            try:
+                joints = np.array(data["joints"], dtype=float)
+                self._set_cmd_target(joints)
                 return jsonify({"success": True})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
@@ -569,7 +657,8 @@ class WebControlServer:
                                 "force_mag": round(float(np.linalg.norm(self._ft_force)), 2),
                             },
                             "cmd_torques": [round(float(v), 3) for v in self._commanded_torques] if self._commanded_torques is not None else [],
-                            "target_joints": [round(float(v), 4) for v in self._target_joints] if self._target_joints is not None else [],
+                            "cmd_target_raw": [round(float(v), 4) for v in self._cmd_target_raw] if self._cmd_target_raw is not None else [],
+                            "cmd_target_smooth": [round(float(v), 4) for v in self._cmd_target_smooth] if self._cmd_target_smooth is not None else [],
                             "alicia_joints": [round(float(v), 4) for v in self._alicia_joints] if self._alicia_joints is not None else [],
                             "alicia_teleop": self._alicia_teleop,
                             "gripper_raw": round(float(self._gripper_raw), 1) if self._gripper_raw is not None else None,
