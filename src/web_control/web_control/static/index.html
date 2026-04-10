@@ -168,8 +168,7 @@
       </div>
       <div id="tab-joint" class="tab-content">
         <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center;">
-          <button id="btnJointCtrl" class="btn-send" onclick="toggleJointController()" style="padding:8px 20px;">Enable Joint Controller</button>
-          <span id="jointCtrlStatus" style="font-size:0.9em; color:var(--dim);">Checking...</span>
+          <button id="btnJointCtrl" class="btn-send" onclick="toggleJointController()" style="padding:8px 20px;">Enable Joint Impedance Controller</button>
         </div>
         <div id="jointSliderContainer"></div>
         <div class="btn-row" style="margin-top:8px;">
@@ -567,17 +566,12 @@ let jointSendingActive = false;
 
 function updateJointCtrlBtn() {
   const btn = document.getElementById("btnJointCtrl");
-  const status = document.getElementById("jointCtrlStatus");
   if (jointControllerActive) {
-    btn.textContent = "Disable Joint Controller";
+    btn.textContent = "Disable Joint Impedance Controller";
     btn.style.background = "var(--green)";
-    status.textContent = "Joint impedance controller: active";
-    status.style.color = "var(--green)";
   } else {
-    btn.textContent = "Enable Joint Controller";
+    btn.textContent = "Enable Joint Impedance Controller";
     btn.style.background = "var(--accent)";
-    status.textContent = "Joint impedance controller: inactive";
-    status.style.color = "var(--dim)";
   }
 }
 
