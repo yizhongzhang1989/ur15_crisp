@@ -110,6 +110,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/api/process/status":
             result = self._dashboard.get_process_status()
             self._json_response(result)
+        elif self.path == "/api/process/status_lite":
+            result = self._dashboard.get_process_status_lite()
+            self._json_response(result)
+        elif self.path == "/api/process/convert_status":
+            result = self._dashboard.get_convert_status()
+            self._json_response(result)
         elif self.path.startswith("/robot/") or self.path.startswith("/vendor/"):
             # Serve URDF, meshes, and JS vendor files from ur15_dashboard
             rel_path = self.path.lstrip("/")
@@ -149,6 +155,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/api/process/convert":
             result = self._dashboard.run_conversion(body)
             self._json_response(result)
+        elif self.path == "/api/process/convert/stop":
+            result = self._dashboard.stop_conversion()
+            self._json_response(result)
         elif self.path == "/api/process/delete_all":
             result = self._dashboard.delete_all_converted()
             self._json_response(result)
@@ -156,13 +165,16 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
 
     def _json_response(self, data):
-        body = json.dumps(data).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            body = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def log_message(self, format, *args):
         if len(args) >= 2 and "404" in str(args[1]):
@@ -215,6 +227,15 @@ class DataCollectionDashboard(Node):
         self._replay_thread = None
         self._replay_stop_event = threading.Event()
         self._arm_pub = None
+
+        # Conversion state
+        self._converting = False
+        self._convert_lock = threading.Lock()
+        self._convert_episode_status = {}  # bag_name -> {status, detail, timestamp}
+        self._convert_result = None
+        self._convert_thread = None
+        self._convert_cancel_event = threading.Event()
+        self._convert_dataset_dir = None
 
         # Recording state
         self._recording = False
@@ -420,6 +441,40 @@ class DataCollectionDashboard(Node):
                      if d.startswith("episode_") and os.path.isdir(
                          os.path.join(self._default_save_path, d))])
 
+    def get_process_status_lite(self):
+        """Fast status: bag names + sizes only, no YAML/JSON/H5 parsing."""
+        rosbag_dir = self._default_save_path
+        from common.workspace import get_workspace_root
+        dataset_dir = os.path.join(get_workspace_root(), "tmp", "dataset")
+        bags = []
+        if os.path.isdir(rosbag_dir):
+            for d in sorted(os.listdir(rosbag_dir)):
+                bag_path = os.path.join(rosbag_dir, d)
+                if not d.startswith("episode_") or not os.path.isdir(bag_path):
+                    continue
+                try:
+                    size_mb = sum(
+                        os.path.getsize(os.path.join(bag_path, f))
+                        for f in os.listdir(bag_path)
+                    ) / (1024 * 1024)
+                except OSError:
+                    size_mb = 0
+                bags.append({
+                    "name": d,
+                    "size_mb": round(size_mb, 1),
+                    "converted": False,
+                    "topics": [],
+                    "duration": 0,
+                    "total_messages": 0,
+                    "dataset": None,
+                })
+        return {
+            "rosbag_dir": rosbag_dir,
+            "dataset_dir": dataset_dir,
+            "bags": bags,
+            "dataset": {"exists": os.path.isdir(dataset_dir), "episodes": 0, "h5_files": 0, "videos": 0},
+        }
+
     def get_process_status(self):
         """Get detailed status of rosbag episodes and dataset."""
         import yaml
@@ -540,7 +595,9 @@ class DataCollectionDashboard(Node):
         }
 
     def run_conversion(self, params):
-        """Run bag-to-dataset conversion."""
+        """Start bag-to-dataset conversion in a background thread."""
+        if self._converting:
+            return {"success": False, "error": "Conversion already in progress"}
         try:
             import sys
             from common.workspace import get_workspace_root
@@ -548,16 +605,183 @@ class DataCollectionDashboard(Node):
             scripts_dir = os.path.join(ws_root, "scripts")
             if scripts_dir not in sys.path:
                 sys.path.insert(0, scripts_dir)
-            from bag_to_dataset import convert_all
 
             rosbag_dir = params.get("rosbag_dir", self._default_save_path)
             dataset_dir = params.get("dataset_dir", os.path.join(ws_root, "tmp", "dataset"))
             task_name = params.get("task_name", "teleop")
+            num_threads = int(params.get("num_threads", 16))
 
-            result = convert_all(rosbag_dir, dataset_dir, task_name)
-            return result
+            with self._convert_lock:
+                self._converting = True
+                self._convert_episode_status = {}
+                self._convert_result = None
+                self._convert_cancel_event.clear()
+                self._convert_dataset_dir = dataset_dir
+
+            self._convert_thread = threading.Thread(
+                target=self._conversion_worker,
+                args=(rosbag_dir, dataset_dir, task_name, num_threads),
+                daemon=True,
+            )
+            self._convert_thread.start()
+            self.get_logger().info(
+                f"Conversion started: {rosbag_dir} -> {dataset_dir} "
+                f"(task={task_name}, threads={num_threads})"
+            )
+            return {"success": True, "message": "Conversion started", "num_threads": num_threads}
         except Exception as e:
+            self._converting = False
             return {"success": False, "error": str(e)}
+
+    def _conversion_worker(self, rosbag_dir, dataset_dir, task_name, num_threads):
+        """Background worker that runs the conversion."""
+        try:
+            from bag_to_dataset import convert_all
+
+            def _status_cb(bag_name, status, detail):
+                with self._convert_lock:
+                    entry = {
+                        "status": status,
+                        "timestamp": time.time(),
+                    }
+                    if isinstance(detail, dict) and "stage" in detail:
+                        entry["stage"] = detail["stage"]
+                        entry["total_stages"] = detail["total_stages"]
+                        entry["percent"] = detail["percent"]
+                    self._convert_episode_status[bag_name] = entry
+                if status != "converting":
+                    self.get_logger().info(f"Episode {bag_name}: {status}")
+
+            result = convert_all(
+                rosbag_dir, dataset_dir, task_name,
+                num_threads=num_threads,
+                status_callback=_status_cb,
+                cancel_event=self._convert_cancel_event,
+            )
+            with self._convert_lock:
+                self._convert_result = result
+                self._converting = False
+            if self._convert_cancel_event.is_set():
+                self.get_logger().info("Conversion cancelled by user")
+                self._cleanup_incomplete_conversions(dataset_dir)
+            else:
+                self.get_logger().info(
+                    f"Conversion finished: {result.get('converted', 0)} converted, "
+                    f"{result.get('skipped', 0)} skipped, {result.get('errors', 0)} errors"
+                )
+        except Exception as e:
+            with self._convert_lock:
+                self._convert_result = {"success": False, "error": str(e)}
+                self._converting = False
+            self.get_logger().error(f"Conversion failed: {e}")
+
+    def get_convert_status(self):
+        """Return current conversion progress for polling."""
+        with self._convert_lock:
+            episodes = {}
+            for bag_name, info in self._convert_episode_status.items():
+                ep = {
+                    "status": info["status"],
+                    "timestamp": info.get("timestamp", 0),
+                }
+                if "stage" in info:
+                    ep["stage"] = info["stage"]
+                    ep["total_stages"] = info["total_stages"]
+                    ep["percent"] = info["percent"]
+                episodes[bag_name] = ep
+            return {
+                "converting": self._converting,
+                "episodes": episodes,
+                "result": self._convert_result,
+            }
+
+    def stop_conversion(self):
+        """Stop the running conversion and clean up incomplete files."""
+        if not self._converting:
+            return {"success": False, "error": "No conversion in progress"}
+        self._convert_cancel_event.set()
+        self.get_logger().info("Conversion cancel signal sent")
+        return {"success": True, "message": "Conversion stopping"}
+
+    def _cleanup_incomplete_conversions(self, dataset_dir):
+        """Remove output files for episodes that were not fully converted."""
+        with self._convert_lock:
+            incomplete = [
+                name for name, info in self._convert_episode_status.items()
+                if info["status"] in ("converting", "cancelled")
+            ]
+        if not incomplete:
+            return
+        self.get_logger().info(f"Cleaning up {len(incomplete)} incomplete episodes")
+        # Find and remove any partial output files for incomplete episodes
+        for bag_name in incomplete:
+            # Match output files that contain the bag_name's episode index
+            for subdir in ("data", "episode", "video_agentview"):
+                dirpath = os.path.join(dataset_dir, subdir)
+                if not os.path.isdir(dirpath):
+                    continue
+                for fname in os.listdir(dirpath):
+                    # Episode output filenames include source_bag info via episode index
+                    # but safer to check all recently created files from this bag
+                    # The source_bag is stored in the episode JSON, but for incomplete
+                    # ones the JSON may not exist. Match by checking episode JSONs.
+                    pass
+            # Alternative: search episode JSONs for source_bag references
+            ep_json_dir = os.path.join(dataset_dir, "episode")
+            if os.path.isdir(ep_json_dir):
+                for fname in list(os.listdir(ep_json_dir)):
+                    if not fname.endswith(".json"):
+                        continue
+                    fpath = os.path.join(ep_json_dir, fname)
+                    try:
+                        with open(fpath) as jf:
+                            d = json.load(jf)
+                        for ep in d.get("episodes", []):
+                            if ep.get("source_bag") == bag_name:
+                                ep_name = ep.get("filename", "")
+                                self._remove_episode_files(dataset_dir, ep_name, fpath)
+                                self.get_logger().info(f"Cleaned up incomplete: {bag_name}")
+                    except Exception:
+                        pass
+            # Also remove partial files that may exist without a complete JSON
+            # (if conversion was interrupted before writing the JSON)
+            self._remove_partial_files_for_bag(dataset_dir, bag_name)
+        # Update episode status to reflect cleanup
+        with self._convert_lock:
+            for name in incomplete:
+                if name in self._convert_episode_status:
+                    self._convert_episode_status[name]["status"] = "cancelled"
+
+    def _remove_episode_files(self, dataset_dir, ep_name, json_path):
+        """Remove H5, video, and JSON for a given episode name."""
+        for subdir, ext in [("data", ".h5"), ("video_agentview", ".mp4")]:
+            fpath = os.path.join(dataset_dir, subdir, ep_name + ext)
+            if os.path.isfile(fpath):
+                os.remove(fpath)
+        if os.path.isfile(json_path):
+            os.remove(json_path)
+
+    def _remove_partial_files_for_bag(self, dataset_dir, bag_name):
+        """Remove any output files that might exist without a completed episode JSON."""
+        # The episode index in the filename corresponds to the bag's sorted position.
+        # We scan for any files that reference this bag by checking H5 files
+        # that don't have a corresponding completed episode JSON.
+        data_dir = os.path.join(dataset_dir, "data")
+        ep_dir = os.path.join(dataset_dir, "episode")
+        vid_dir = os.path.join(dataset_dir, "video_agentview")
+        if os.path.isdir(data_dir):
+            for fname in list(os.listdir(data_dir)):
+                if not fname.endswith(".h5"):
+                    continue
+                ep_name = fname[:-3]
+                json_path = os.path.join(ep_dir, ep_name + ".json") if os.path.isdir(ep_dir) else ""
+                if not os.path.isfile(json_path):
+                    # No JSON means this H5 is from an incomplete conversion
+                    os.remove(os.path.join(data_dir, fname))
+                    vid_path = os.path.join(vid_dir, ep_name + ".mp4")
+                    if os.path.isfile(vid_path):
+                        os.remove(vid_path)
+                    self.get_logger().info(f"Removed partial files: {ep_name}")
 
     def delete_all_converted(self):
         """Delete all converted dataset files (keeps rosbags)."""

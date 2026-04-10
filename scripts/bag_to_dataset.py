@@ -13,6 +13,8 @@ Usage:
 import json
 import os
 import time
+from bisect import bisect_left
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import h5py
@@ -29,6 +31,12 @@ except ImportError:
     pass
 
 from ur15_dashboard.kinematics import forward_kinematics, fk_quaternion
+
+
+class ConversionCancelled(Exception):
+    """Raised when conversion is cancelled by the user."""
+    pass
+
 
 JOINT_NAMES = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -53,152 +61,191 @@ def _get_msg_class(type_str):
     raise ValueError(f"Unknown message type: {type_str}")
 
 
-def read_bag_topics(bag_path):
-    """Read all messages from a rosbag, grouped by topic.
-    
-    Returns:
-        dict: {topic_name: [(timestamp_ns, deserialized_msg), ...]}
-    """
+def _nearest_idx(timestamps, target):
+    """Find index of nearest timestamp using binary search. O(log n)."""
+    pos = bisect_left(timestamps, target)
+    if pos == 0:
+        return 0
+    if pos >= len(timestamps):
+        return len(timestamps) - 1
+    if abs(timestamps[pos] - target) < abs(timestamps[pos - 1] - target):
+        return pos
+    return pos - 1
+
+
+def _open_bag_reader(bag_path):
+    """Open a rosbag SequentialReader."""
     reader = rosbag2_py.SequentialReader()
     storage_options = rosbag2_py.StorageOptions(uri=bag_path, storage_id="sqlite3")
     converter_options = rosbag2_py.ConverterOptions(
         input_serialization_format="cdr", output_serialization_format="cdr"
     )
     reader.open(storage_options, converter_options)
-
-    # Get topic types
-    topic_types = {}
-    for t in reader.get_all_topics_and_types():
-        topic_types[t.name] = t.type
-
-    messages = {}
-    while reader.has_next():
-        topic, data, timestamp = reader.read_next()
-        if topic not in messages:
-            messages[topic] = []
-        msg_class = _get_msg_class(topic_types[topic])
-        msg = deserialize_message(data, msg_class)
-        messages[topic].append((timestamp, msg))
-
-    return messages
+    topic_types = {t.name: t.type for t in reader.get_all_topics_and_types()}
+    return reader, topic_types
 
 
-def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
+def _get_bag_message_count(bag_path):
+    """Get total message count from bag metadata (fast, no deserialization)."""
+    import yaml
+    meta_file = os.path.join(bag_path, "metadata.yaml")
+    if os.path.isfile(meta_file):
+        try:
+            with open(meta_file) as f:
+                meta = yaml.safe_load(f)
+            return meta.get("rosbag2_bagfile_information", {}).get("message_count", 0)
+        except Exception:
+            pass
+    return 0
+
+
+def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop",
+                    cancel_event=None, progress_callback=None):
     """
-    Convert a single rosbag episode to dataset format.
+    Convert a single rosbag episode to dataset format (memory-efficient).
+
+    Uses a two-pass approach:
+      Pass 1: Read lightweight topics (joints, FT, arm) + camera timestamps only.
+      Pass 2: Stream camera images directly to VideoWriter without accumulation.
 
     Args:
         bag_path: Path to rosbag directory
         dataset_dir: Output dataset directory
         episode_idx: Episode index number
         task_name: Task description string
+        cancel_event: Optional threading.Event; if set, raises ConversionCancelled
+        progress_callback: Optional callable(stage, total_stages, percent)
+            stage: current stage (1-based)
+            total_stages: total number of stages (3)
+            percent: 0-100 progress within current stage
 
     Returns:
         dict: Episode metadata
+
+    Raises:
+        ConversionCancelled: If cancel_event is set during conversion.
     """
-    print(f"  Reading bag: {bag_path}")
-    messages = read_bag_topics(bag_path)
+    TOTAL_STAGES = 3
 
-    # Extract camera images (resampling reference clock)
+    def _check_cancel():
+        if cancel_event and cancel_event.is_set():
+            raise ConversionCancelled(f"Episode {episode_idx} cancelled")
+
+    def _report(stage, pct):
+        if progress_callback:
+            progress_callback(stage, TOTAL_STAGES, min(int(pct), 100))
+
     cam_topic = "/ur15_camera/image_raw"
-    cam_msgs = messages.get(cam_topic, [])
-    if not cam_msgs:
-        print(f"  WARNING: No camera messages found on {cam_topic}")
-
     joint_topic = "/joint_states"
-    joint_msgs = messages.get(joint_topic, [])
     ft_topic = "/force_torque_sensor_broadcaster/wrench"
-    ft_msgs = messages.get(ft_topic, [])
     arm_topic = "/arm_joint_state"
-    arm_msgs = messages.get(arm_topic, [])
 
-    # Use camera timestamps as reference (lowest rate, defines steps)
-    if cam_msgs:
-        ref_timestamps = [t for t, _ in cam_msgs]
-    elif joint_msgs:
-        # Downsample joint states to ~25 Hz
-        ref_timestamps = [t for t, _ in joint_msgs[::20]]
+    # ── Pass 1: read lightweight data + camera timestamps ──
+    print(f"  [{episode_idx}] Pass 1 (metadata): {bag_path}")
+    total_msgs = _get_bag_message_count(bag_path)
+    _report(1, 0)
+    reader, topic_types = _open_bag_reader(bag_path)
+
+    # Lightweight storage: timestamps + extracted scalars only
+    cam_timestamps = []          # just int64 timestamps
+    joint_ts = []
+    joint_data = []              # list of (q6, v6, e6) tuples
+    ft_ts = []
+    ft_data = []                 # list of 6-element tuples
+    arm_ts = []
+    arm_data = []                # list of (j1..j6, gripper) tuples
+
+    msg_count = 0
+    while reader.has_next():
+        topic, data, timestamp = reader.read_next()
+        msg_count += 1
+        if msg_count % 500 == 0:
+            _check_cancel()
+            if total_msgs > 0:
+                _report(1, msg_count * 100 / total_msgs)
+        if topic == cam_topic:
+            cam_timestamps.append(timestamp)
+        elif topic == joint_topic:
+            msg = deserialize_message(data, _get_msg_class(topic_types[topic]))
+            q = [0.0] * 6; v = [0.0] * 6; e = [0.0] * 6
+            for i, name in enumerate(msg.name):
+                if name in JOINT_NAMES:
+                    idx = JOINT_NAMES.index(name)
+                    q[idx] = msg.position[i] if i < len(msg.position) else 0.0
+                    v[idx] = msg.velocity[i] if i < len(msg.velocity) else 0.0
+                    e[idx] = msg.effort[i] if i < len(msg.effort) else 0.0
+            joint_ts.append(timestamp)
+            joint_data.append((q, v, e))
+        elif topic == ft_topic:
+            msg = deserialize_message(data, _get_msg_class(topic_types[topic]))
+            ft_ts.append(timestamp)
+            ft_data.append((
+                msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z,
+                msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z,
+            ))
+        elif topic == arm_topic:
+            msg = deserialize_message(data, _get_msg_class(topic_types[topic]))
+            arm_ts.append(timestamp)
+            arm_data.append((
+                msg.joint1, msg.joint2, msg.joint3,
+                msg.joint4, msg.joint5, msg.joint6,
+                msg.gripper,
+            ))
+    del reader  # free reader resources
+    _report(1, 100)
+
+    if not cam_timestamps:
+        print(f"  [{episode_idx}] WARNING: No camera messages on {cam_topic}")
+
+    # Determine reference timestamps
+    if cam_timestamps:
+        ref_timestamps = cam_timestamps
+    elif joint_ts:
+        ref_timestamps = joint_ts[::20]  # downsample to ~25 Hz
     else:
-        print("  ERROR: No reference timestamps")
+        print(f"  [{episode_idx}] ERROR: No reference timestamps")
         return None
 
     n_steps = len(ref_timestamps)
     t0 = ref_timestamps[0]
     timestamps_sec = [(t - t0) * 1e-9 for t in ref_timestamps]
+    print(f"  [{episode_idx}] Steps: {n_steps}, Duration: {timestamps_sec[-1]:.1f}s")
 
-    print(f"  Steps: {n_steps}, Duration: {timestamps_sec[-1]:.1f}s")
-
-    # Helper: find nearest message to a timestamp
-    def nearest_msg(msgs, target_ts):
-        if not msgs:
-            return None
-        idx = min(range(len(msgs)), key=lambda i: abs(msgs[i][0] - target_ts))
-        return msgs[idx][1]
-
-    # Extract data at each camera frame
+    # Build output arrays using binary search (O(n log n) total)
     current_joint_position = np.zeros((n_steps, 6), dtype=np.float64)
     current_joint_velocity = np.zeros((n_steps, 6), dtype=np.float64)
     current_joint_effort = np.zeros((n_steps, 6), dtype=np.float64)
     target_joint_position = np.zeros((n_steps, 6), dtype=np.float64)
     target_gripper_position = np.zeros((n_steps, 1), dtype=np.float64)
     tcp_wrench = np.zeros((n_steps, 6), dtype=np.float64)
-    images = []
 
     for step, ref_ts in enumerate(ref_timestamps):
-        # Joint state (current)
-        js = nearest_msg(joint_msgs, ref_ts)
-        if js:
-            q = [0.0] * 6
-            v = [0.0] * 6
-            e = [0.0] * 6
-            for i, name in enumerate(js.name):
-                if name in JOINT_NAMES:
-                    idx = JOINT_NAMES.index(name)
-                    q[idx] = js.position[i] if i < len(js.position) else 0.0
-                    v[idx] = js.velocity[i] if i < len(js.velocity) else 0.0
-                    e[idx] = js.effort[i] if i < len(js.effort) else 0.0
-            current_joint_position[step] = q
-            current_joint_velocity[step] = v
-            current_joint_effort[step] = e
+        if joint_ts:
+            ji = _nearest_idx(joint_ts, ref_ts)
+            current_joint_position[step] = joint_data[ji][0]
+            current_joint_velocity[step] = joint_data[ji][1]
+            current_joint_effort[step] = joint_data[ji][2]
+        if ft_ts:
+            fi = _nearest_idx(ft_ts, ref_ts)
+            tcp_wrench[step] = ft_data[fi]
+        if arm_ts:
+            ai = _nearest_idx(arm_ts, ref_ts)
+            target_joint_position[step] = arm_data[ai][:6]
+            target_gripper_position[step, 0] = arm_data[ai][6]
 
-        # F/T wrench
-        ft = nearest_msg(ft_msgs, ref_ts)
-        if ft:
-            tcp_wrench[step] = [
-                ft.wrench.force.x, ft.wrench.force.y, ft.wrench.force.z,
-                ft.wrench.torque.x, ft.wrench.torque.y, ft.wrench.torque.z,
-            ]
+    # Free lightweight data now that arrays are built
+    del joint_ts, joint_data, ft_ts, ft_data, arm_ts, arm_data
 
-        # Leader arm (target)
-        arm = nearest_msg(arm_msgs, ref_ts)
-        if arm:
-            target_joint_position[step] = [
-                arm.joint1, arm.joint2, arm.joint3,
-                arm.joint4, arm.joint5, arm.joint6,
-            ]
-            target_gripper_position[step, 0] = arm.gripper
+    _check_cancel()
+    _report(2, 0)
 
-        # Camera image
-        if cam_msgs:
-            img_msg = nearest_msg(cam_msgs, ref_ts)
-            if img_msg:
-                h, w = img_msg.height, img_msg.width
-                if img_msg.encoding in ("rgb8", "bgr8"):
-                    img = np.frombuffer(img_msg.data, dtype=np.uint8).reshape(h, w, 3)
-                    if img_msg.encoding == "rgb8":
-                        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                else:
-                    img = np.zeros((h, w, 3), dtype=np.uint8)
-                images.append(img)
-
-    # Create output directories
+    # ── Write HDF5 ──
     safe_task = task_name.replace(" ", "_")
     ep_name = f"{episode_idx:08d}-ur15_teleop__{safe_task}__episode_{episode_idx}"
     os.makedirs(os.path.join(dataset_dir, "data"), exist_ok=True)
     os.makedirs(os.path.join(dataset_dir, "episode"), exist_ok=True)
     os.makedirs(os.path.join(dataset_dir, "video_agentview"), exist_ok=True)
 
-    # Write HDF5
     h5_path = os.path.join(dataset_dir, "data", f"{ep_name}.h5")
     with h5py.File(h5_path, "w") as f:
         f.create_dataset("timestamps", data=np.array(timestamps_sec))
@@ -208,20 +255,51 @@ def convert_episode(bag_path, dataset_dir, episode_idx, task_name="teleop"):
         f.create_dataset("target_joint_position", data=target_joint_position)
         f.create_dataset("target_gripper_position", data=target_gripper_position)
         f.create_dataset("TCP_wrench", data=tcp_wrench)
+    del current_joint_position, current_joint_velocity, current_joint_effort
+    del target_joint_position, target_gripper_position, tcp_wrench
 
-    print(f"  Wrote HDF5: {h5_path}")
+    print(f"  [{episode_idx}] Wrote HDF5: {h5_path}")
+    _report(2, 100)
 
-    # Write video
-    if images:
-        vid_path = os.path.join(dataset_dir, "video_agentview", f"{ep_name}.mp4")
-        h, w = images[0].shape[:2]
+    # ── Pass 2: stream camera images directly to video writer ──
+    vid_path = os.path.join(dataset_dir, "video_agentview", f"{ep_name}.mp4")
+    total_cam_frames = len(cam_timestamps)
+    _report(3, 0)
+    if cam_timestamps:
+        print(f"  [{episode_idx}] Pass 2 (video): streaming {len(cam_timestamps)} frames")
         fps = n_steps / max(timestamps_sec[-1], 0.1)
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(vid_path, fourcc, fps, (w, h))
-        for img in images:
+        writer = None
+
+        reader2, topic_types2 = _open_bag_reader(bag_path)
+        filter_ = rosbag2_py.StorageFilter(topics=[cam_topic])
+        reader2.set_filter(filter_)
+
+        frame_count = 0
+        while reader2.has_next():
+            if frame_count % 50 == 0:
+                _check_cancel()
+                if total_cam_frames > 0:
+                    _report(3, frame_count * 100 / total_cam_frames)
+            topic, data, timestamp = reader2.read_next()
+            msg = deserialize_message(data, _get_msg_class(topic_types2[topic]))
+            h, w = msg.height, msg.width
+            if msg.encoding in ("rgb8", "bgr8"):
+                img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w, 3)
+                if msg.encoding == "rgb8":
+                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            else:
+                img = np.zeros((h, w, 3), dtype=np.uint8)
+            if writer is None:
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(vid_path, fourcc, fps, (w, h))
             writer.write(img)
-        writer.release()
-        print(f"  Wrote video: {vid_path} ({len(images)} frames, {fps:.1f} fps)")
+            frame_count += 1
+
+        if writer is not None:
+            writer.release()
+        del reader2
+        print(f"  [{episode_idx}] Wrote video: {vid_path} ({frame_count} frames, {fps:.1f} fps)")
+    _report(3, 100)
 
     # Episode metadata
     ep_meta = {
@@ -265,9 +343,19 @@ def create_dataset_meta(dataset_dir, episodes_meta):
         json.dump({"episodes": episodes_meta}, f, indent=2)
 
 
-def convert_all(rosbag_dir, dataset_dir, task_name="teleop"):
+def convert_all(rosbag_dir, dataset_dir, task_name="teleop", num_threads=1,
+                status_callback=None, cancel_event=None):
     """Convert all episodes in rosbag_dir to dataset format.
-    
+
+    Args:
+        rosbag_dir: Source directory with episode_* bags
+        dataset_dir: Output dataset directory
+        task_name: Task description string
+        num_threads: Number of parallel conversion threads (default 1)
+        status_callback: Optional callable(bag_name, status, detail) where
+            status is 'converting', 'converted', or 'error'
+        cancel_event: Optional threading.Event; if set, conversion stops ASAP
+
     Returns:
         dict with conversion results
     """
@@ -297,23 +385,88 @@ def convert_all(rosbag_dir, dataset_dir, task_name="teleop"):
                 except Exception:
                     pass
 
-    all_meta = []
-    converted = 0
+    # Separate into to-convert and skipped
+    to_convert = []
     skipped = 0
-
     for i, bag_name in enumerate(bags):
-        bag_path = os.path.join(rosbag_dir, bag_name)
         if bag_name in existing:
             print(f"  Skipping (already converted): {bag_name}")
+            if status_callback:
+                status_callback(bag_name, "skipped", None)
             skipped += 1
-            continue
+        else:
+            to_convert.append((i, bag_name))
+
+    all_meta = []
+    converted = 0
+    errors = 0
+
+    def _convert_one(args):
+        idx, bag_name = args
+        if cancel_event and cancel_event.is_set():
+            if status_callback:
+                status_callback(bag_name, "cancelled", None)
+            return bag_name, None, "cancelled"
+        bag_path = os.path.join(rosbag_dir, bag_name)
+        if status_callback:
+            status_callback(bag_name, "converting", {"stage": 1, "total_stages": 3, "percent": 0})
+
+        def _progress_cb(stage, total_stages, percent):
+            if status_callback:
+                status_callback(bag_name, "converting", {
+                    "stage": stage, "total_stages": total_stages, "percent": percent,
+                })
+
         try:
-            meta = convert_episode(bag_path, dataset_dir, i, task_name)
-            if meta:
+            meta = convert_episode(bag_path, dataset_dir, idx, task_name,
+                                   cancel_event=cancel_event,
+                                   progress_callback=_progress_cb)
+            if status_callback:
+                status_callback(bag_name, "converted", meta)
+            return bag_name, meta, None
+        except ConversionCancelled:
+            if status_callback:
+                status_callback(bag_name, "cancelled", None)
+            return bag_name, None, "cancelled"
+        except Exception as e:
+            if status_callback:
+                status_callback(bag_name, "error", str(e))
+            return bag_name, None, str(e)
+
+    effective_threads = max(1, min(num_threads, len(to_convert))) if to_convert else 1
+    print(f"  Converting {len(to_convert)} episodes with {effective_threads} threads")
+
+    if effective_threads == 1:
+        # Single-threaded (original behavior)
+        for args in to_convert:
+            if cancel_event and cancel_event.is_set():
+                break
+            bag_name, meta, err = _convert_one(args)
+            if err:
+                if err != "cancelled":
+                    print(f"  ERROR converting {bag_name}: {err}")
+                    errors += 1
+            elif meta:
                 all_meta.append(meta)
                 converted += 1
-        except Exception as e:
-            print(f"  ERROR converting {bag_name}: {e}")
+    else:
+        executor = ThreadPoolExecutor(max_workers=effective_threads)
+        futures = {executor.submit(_convert_one, args): args for args in to_convert}
+        try:
+            for future in as_completed(futures):
+                bag_name, meta, err = future.result()
+                if err:
+                    if err != "cancelled":
+                        print(f"  ERROR converting {bag_name}: {err}")
+                        errors += 1
+                elif meta:
+                    all_meta.append(meta)
+                    converted += 1
+                if cancel_event and cancel_event.is_set():
+                    break
+        finally:
+            # cancel_futures=True (Python 3.9+) immediately cancels queued work
+            executor.shutdown(wait=False, cancel_futures=True)
 
     # Rebuild full episode index
     all_episodes = []
@@ -334,7 +487,8 @@ def convert_all(rosbag_dir, dataset_dir, task_name="teleop"):
         "total_bags": len(bags),
         "converted": converted,
         "skipped": skipped,
+        "errors": errors,
         "total_episodes": len(all_episodes),
     }
-    print(f"  Done: {converted} converted, {skipped} skipped, {len(all_episodes)} total")
+    print(f"  Done: {converted} converted, {skipped} skipped, {errors} errors, {len(all_episodes)} total")
     return result

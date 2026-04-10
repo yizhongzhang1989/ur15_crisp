@@ -1,9 +1,15 @@
-"""Load CRISP controllers into a running Gazebo simulation.
+"""Load CRISP controllers into a running simulation.
 
 Prerequisites:
-  The ur_simulator must already be running in effort mode:
-    source install/setup.bash
-    cd src/ur_simulator && ./launch_all.sh --control_mode effort
+  The ur_simulator (https://github.com/yizhongzhang1989/ur_simulator) must be
+  cloned, built, and running separately:
+
+    cd ~/Documents/ur_simulator
+    ./launch_all.sh --controllers_file \\
+        <path-to-ur15_crisp>/install/ur15_bringup/share/ur15_bringup/config/ur15_sim_controllers.yaml
+
+  MuJoCo (default) always exposes effort interfaces — no --control_mode needed.
+  For Gazebo, add: --simulator gazebo --control_mode effort
 
 This launch file spawns CRISP controllers into the existing controller_manager.
 Controller types and parameters are defined in ur15_sim_controllers.yaml.
