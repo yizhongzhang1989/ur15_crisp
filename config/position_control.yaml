@@ -1,0 +1,34 @@
+# Forward Position Controller Parameters
+# These limit the rate and acceleration of position commands sent to
+# forward_position_controller to prevent sudden force changes.
+#
+# Copy to config/position_control.yaml to customize:
+#   cp src/web_control/config/position_control_template.yaml config/position_control.yaml
+
+# Per-joint max velocity (rad/s)
+fwd_pos_max_vel:
+  shoulder_pan_joint: 2.0
+  shoulder_lift_joint: 2.0
+  elbow_joint: 2.0
+  wrist_1_joint: 4.0
+  wrist_2_joint: 4.0
+  wrist_3_joint: 4.0
+
+# Per-joint max acceleration (rad/s^2)
+fwd_pos_max_accel:
+  shoulder_pan_joint: 6.0
+  shoulder_lift_joint: 6.0
+  elbow_joint: 6.0
+  wrist_1_joint: 12.0
+  wrist_2_joint: 12.0
+  wrist_3_joint: 12.0
+
+# Per-joint max deceleration (rad/s^2)
+# Also used for braking distance calculation: v_brake = sqrt(2 * decel * |d|)
+fwd_pos_max_decel:
+  shoulder_pan_joint: 4.0
+  shoulder_lift_joint: 4.0
+  elbow_joint: 4.0
+  wrist_1_joint: 8.0
+  wrist_2_joint: 8.0
+  wrist_3_joint: 8.0
