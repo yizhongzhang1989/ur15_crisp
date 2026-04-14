@@ -147,20 +147,14 @@ class WebControlServer:
                 callback_group=ReentrantCallbackGroup(),
             )
 
-        # Joint command target pipeline: raw → smooth → controllers
+        # Joint command target pipeline: raw → controllers
         self._cmd_target_pub = self.robot.node.create_publisher(
             JointState, "/cmd_target_joint", 10
-        )
-        self._cmd_target_smooth_pub = self.robot.node.create_publisher(
-            JointState, "/cmd_target_joint_smooth", 10
         )
         self._fwd_pos_pub = self.robot.node.create_publisher(
             Float64MultiArray, "/forward_position_controller/commands", 10
         )
         self._cmd_target_raw = None     # latest raw target (set by API/teleop)
-        self._cmd_target_smooth = None  # last smoothed output
-        self._raw_history = []          # last N raw frames for smoothing
-        self._raw_history_max = 10
         # Load position control config for forward_position_controller trapezoidal profile
         pos_cfg = _load_position_control_config()
         joint_names = [
@@ -185,7 +179,7 @@ class WebControlServer:
         self._fwd_pos_prev = None    # previous position command
         self._fwd_pos_vel = None     # current velocity state (rad/s)
         self._fwd_pos_time = None    # timestamp of last tick
-        # 250 Hz timer to continuously publish raw + smooth and feed controllers
+        # 250 Hz timer to continuously publish raw and feed controllers
         self._cmd_pub_timer = self.robot.node.create_timer(
             0.004, self._cmd_pub_timer_cb, callback_group=ReentrantCallbackGroup()
         )
@@ -229,7 +223,6 @@ class WebControlServer:
                 "eff": [round(float(v), 3) for v in eff],
                 "cmd": [round(float(v), 4) for v in self._commanded_torques] if self._commanded_torques is not None else [],
                 "tgt_raw": [round(float(v), 5) for v in self._cmd_target_raw] if self._cmd_target_raw is not None else [],
-                "tgt_smooth": [round(float(v), 5) for v in self._cmd_target_smooth] if self._cmd_target_smooth is not None else [],
             }
             with self._plot_lock:
                 self._plot_buffer.append(sample)
@@ -307,87 +300,68 @@ class WebControlServer:
         self._cmd_target_raw = targets
 
     def _cmd_pub_timer_cb(self):
-        """Continuously publish raw, smooth, and feed controllers at 250 Hz."""
+        """Continuously publish raw target and feed controllers at 250 Hz."""
         if not rclpy.ok():
             return
         stamp = self.robot.node.get_clock().now().to_msg()
         raw = self._cmd_target_raw
-        if raw is not None:
-            raw_msg = JointState()
-            raw_msg.header.stamp = stamp
-            raw_msg.name = self.robot.config.joint_names
-            raw_msg.position = [float(j) for j in raw]
-            self._cmd_target_pub.publish(raw_msg)
-            # Bypass smoothing: copy raw directly to smooth
-            self._cmd_target_smooth = list(raw)
-        smooth = self._cmd_target_smooth
-        if smooth is not None:
-            smooth_msg = JointState()
-            smooth_msg.header.stamp = stamp
-            smooth_msg.name = self.robot.config.joint_names
-            smooth_msg.position = list(smooth)
-            self._cmd_target_smooth_pub.publish(smooth_msg)
-            # Feed smoothed target to joint impedance controller (no clamping needed)
-            self.robot.set_target_joint(np.array(smooth))
-            # Feed to forward position controller with trapezoidal velocity profile
-            now = time.monotonic()
-            if self._fwd_pos_prev is None:
-                joints = self.robot.joint_values
-                self._fwd_pos_prev = np.array(joints if joints is not None else smooth, dtype=float)
-                self._fwd_pos_vel = np.zeros(6)
-                self._fwd_pos_time = now
-            dt = now - self._fwd_pos_time
-            dt = max(dt, 1e-6)  # avoid division by zero
+        if raw is None:
+            return
+        raw_msg = JointState()
+        raw_msg.header.stamp = stamp
+        raw_msg.name = self.robot.config.joint_names
+        raw_msg.position = [float(j) for j in raw]
+        self._cmd_target_pub.publish(raw_msg)
+        # Feed to joint impedance controller
+        self.robot.set_target_joint(np.array(raw))
+        # Feed to forward position controller with trapezoidal velocity profile
+        now = time.monotonic()
+        if self._fwd_pos_prev is None:
+            joints = self.robot.joint_values
+            self._fwd_pos_prev = np.array(joints if joints is not None else raw, dtype=float)
+            self._fwd_pos_vel = np.zeros(6)
             self._fwd_pos_time = now
-            target = np.array(smooth, dtype=float)
-            pos_err = target - self._fwd_pos_prev
-            # Compute braking velocity using deceleration limit
-            # v_brake = sqrt(2 * decel * |distance|)
-            dist = np.abs(pos_err)
-            v_brake = np.sqrt(2.0 * self._fwd_pos_max_decel * dist)
-            # Desired velocity: min of v_max and v_brake, with correct sign
-            v_limit = np.minimum(self._fwd_pos_max_vel, v_brake)
-            v_desired = np.sign(pos_err) * v_limit
-            # For very small errors, set desired to zero to avoid jitter
-            v_desired = np.where(dist < 1e-6, 0.0, v_desired)
-            # Limit velocity change: use accel when speeding up, decel when slowing down
-            dv = v_desired - self._fwd_pos_vel
-            # Per-joint: speeding up if |v_desired| > |v_prev|, else slowing down
-            speeding_up = np.abs(v_desired) > np.abs(self._fwd_pos_vel)
-            dv_max = np.where(speeding_up, self._fwd_pos_max_accel * dt, self._fwd_pos_max_decel * dt)
-            dv = np.clip(dv, -dv_max, dv_max)
-            self._fwd_pos_vel = self._fwd_pos_vel + dv
-            # Clamp velocity by v_max
-            self._fwd_pos_vel = np.clip(self._fwd_pos_vel, -self._fwd_pos_max_vel, self._fwd_pos_max_vel)
-            # Apply position step
-            pos_cmd = self._fwd_pos_prev + self._fwd_pos_vel * dt
-            # Don't overshoot target
-            for i in range(6):
-                if self._fwd_pos_vel[i] > 0 and pos_cmd[i] > target[i]:
-                    pos_cmd[i] = target[i]
-                    self._fwd_pos_vel[i] = 0.0
-                elif self._fwd_pos_vel[i] < 0 and pos_cmd[i] < target[i]:
-                    pos_cmd[i] = target[i]
-                    self._fwd_pos_vel[i] = 0.0
-            self._fwd_pos_prev = pos_cmd.copy()
-            fwd_msg = Float64MultiArray()
-            fwd_msg.data = pos_cmd.tolist()
-            self._fwd_pos_pub.publish(fwd_msg)
+        dt = now - self._fwd_pos_time
+        dt = max(dt, 1e-6)  # avoid division by zero
+        self._fwd_pos_time = now
+        target = np.array(raw, dtype=float)
+        pos_err = target - self._fwd_pos_prev
+        # Compute braking velocity using deceleration limit
+        # v_brake = sqrt(2 * decel * |distance|)
+        dist = np.abs(pos_err)
+        v_brake = np.sqrt(2.0 * self._fwd_pos_max_decel * dist)
+        # Desired velocity: min of v_max and v_brake, with correct sign
+        v_limit = np.minimum(self._fwd_pos_max_vel, v_brake)
+        v_desired = np.sign(pos_err) * v_limit
+        # For very small errors, set desired to zero to avoid jitter
+        v_desired = np.where(dist < 1e-6, 0.0, v_desired)
+        # Limit velocity change: use accel when speeding up, decel when slowing down
+        dv = v_desired - self._fwd_pos_vel
+        # Per-joint: speeding up if |v_desired| > |v_prev|, else slowing down
+        speeding_up = np.abs(v_desired) > np.abs(self._fwd_pos_vel)
+        dv_max = np.where(speeding_up, self._fwd_pos_max_accel * dt, self._fwd_pos_max_decel * dt)
+        dv = np.clip(dv, -dv_max, dv_max)
+        self._fwd_pos_vel = self._fwd_pos_vel + dv
+        # Clamp velocity by v_max
+        self._fwd_pos_vel = np.clip(self._fwd_pos_vel, -self._fwd_pos_max_vel, self._fwd_pos_max_vel)
+        # Apply position step
+        pos_cmd = self._fwd_pos_prev + self._fwd_pos_vel * dt
+        # Don't overshoot target
+        for i in range(6):
+            if self._fwd_pos_vel[i] > 0 and pos_cmd[i] > target[i]:
+                pos_cmd[i] = target[i]
+                self._fwd_pos_vel[i] = 0.0
+            elif self._fwd_pos_vel[i] < 0 and pos_cmd[i] < target[i]:
+                pos_cmd[i] = target[i]
+                self._fwd_pos_vel[i] = 0.0
+        self._fwd_pos_prev = pos_cmd.copy()
+        fwd_msg = Float64MultiArray()
+        fwd_msg.data = pos_cmd.tolist()
+        self._fwd_pos_pub.publish(fwd_msg)
 
     def _set_cmd_target(self, joints):
-        """Set raw joint target (smoothing computed by timer)."""
+        """Set raw joint target."""
         self._cmd_target_raw = [float(j) for j in joints]
-
-    def _compute_smooth(self):
-        """Average the last N raw frames."""
-        if not self._raw_history:
-            return
-        n = len(self._raw_history)
-        nj = len(self._raw_history[0])
-        smooth = [0.0] * nj
-        for j in range(nj):
-            smooth[j] = sum(self._raw_history[k][j] for k in range(n)) / n
-        self._cmd_target_smooth = smooth
 
     def _wait_for_robot(self):
         try:
@@ -744,7 +718,6 @@ class WebControlServer:
                             },
                             "cmd_torques": [round(float(v), 3) for v in self._commanded_torques] if self._commanded_torques is not None else [],
                             "cmd_target_raw": [round(float(v), 4) for v in self._cmd_target_raw] if self._cmd_target_raw is not None else [],
-                            "cmd_target_smooth": [round(float(v), 4) for v in self._cmd_target_smooth] if self._cmd_target_smooth is not None else [],
                             "alicia_joints": [round(float(v), 4) for v in self._alicia_joints] if self._alicia_joints is not None else [],
                             "alicia_teleop": self._alicia_teleop,
                             "gripper_raw": round(float(self._gripper_raw), 1) if self._gripper_raw is not None else None,

@@ -136,8 +136,7 @@
       </div>
       <div style="display:flex; gap:12px; font-size:0.8em; font-family:monospace; margin-bottom:4px;">
         <span style="color:#4caf50;">&block; Position (deg)</span>
-        <span style="color:#2196f3;">&block; Target Raw (deg)</span>
-        <span style="color:#00bcd4;">&block; Target Smooth (deg)</span>
+        <span style="color:#2196f3;">&block; Target (deg)</span>
         <span style="color:#ff9800;">&block; Current (A)</span>
         <span style="color:#e94560;">&block; Cmd Torque (Nm)</span>
       </div>
@@ -376,7 +375,7 @@ function setParam(c,n,id,ib){const el=document.getElementById(id);let v=ib?el.va
 
 // === Real-time Plot ===
 const PLOT_MAX_SAMPLES = 6000; // 60s at ~100Hz
-let plotData = { time: [], position: Array.from({length:6},()=>[]), targetRaw: Array.from({length:6},()=>[]), targetSmooth: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
+let plotData = { time: [], position: Array.from({length:6},()=>[]), targetRaw: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
 let plotFrozen = false;
 let plotFrozenTMin = 0, plotFrozenTMax = 10;
 let plotBaseTime = 0; // first ROS timestamp for relative time
@@ -393,7 +392,6 @@ function pushPlotData(d) {
       for (let i = 0; i < 6; i++) {
         plotData.position[i].push(s.pos[i] !== undefined ? s.pos[i] * 180 / Math.PI : NaN);
         plotData.targetRaw[i].push(s.tgt_raw && s.tgt_raw[i] !== undefined ? s.tgt_raw[i] * 180 / Math.PI : NaN);
-        plotData.targetSmooth[i].push(s.tgt_smooth && s.tgt_smooth[i] !== undefined ? s.tgt_smooth[i] * 180 / Math.PI : NaN);
         plotData.current[i].push(s.eff && s.eff[i] !== undefined ? s.eff[i] : NaN);
         plotData.cmdTorque[i].push(s.cmd && s.cmd[i] !== undefined ? s.cmd[i] : NaN);
       }
@@ -403,11 +401,9 @@ function pushPlotData(d) {
     const t = plotData.time.length > 0 ? plotData.time[plotData.time.length - 1] + 0.1 : 0;
     plotData.time.push(t);
     const tgt = d.cmd_target_raw || [];
-    const tgtS = d.cmd_target_smooth || [];
     for (let i = 0; i < 6; i++) {
       plotData.position[i].push(d.joints[i] !== undefined ? d.joints[i] * 180 / Math.PI : NaN);
       plotData.targetRaw[i].push(tgt[i] !== undefined ? tgt[i] * 180 / Math.PI : NaN);
-      plotData.targetSmooth[i].push(tgtS[i] !== undefined ? tgtS[i] * 180 / Math.PI : NaN);
       plotData.current[i].push(d.effort && d.effort[i] !== undefined ? d.effort[i] : NaN);
       plotData.cmdTorque[i].push(d.cmd_torques && d.cmd_torques[i] !== undefined ? d.cmd_torques[i] : NaN);
     }
@@ -415,7 +411,7 @@ function pushPlotData(d) {
   // Trim to max samples
   while (plotData.time.length > PLOT_MAX_SAMPLES) {
     plotData.time.shift();
-    for (let i = 0; i < 6; i++) { plotData.position[i].shift(); plotData.targetRaw[i].shift(); plotData.targetSmooth[i].shift(); plotData.current[i].shift(); plotData.cmdTorque[i].shift(); }
+    for (let i = 0; i < 6; i++) { plotData.position[i].shift(); plotData.targetRaw[i].shift(); plotData.current[i].shift(); plotData.cmdTorque[i].shift(); }
   }
 }
 
@@ -432,7 +428,7 @@ function toggleFreeze() {
 }
 
 function clearPlot() {
-  plotData = { time: [], position: Array.from({length:6},()=>[]), targetRaw: Array.from({length:6},()=>[]), targetSmooth: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
+  plotData = { time: [], position: Array.from({length:6},()=>[]), targetRaw: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
   plotBaseTime = 0;
 }
 
@@ -463,7 +459,6 @@ function drawPlot() {
     if (plotData.time[k] < tMin || plotData.time[k] > tMax) continue;
     const p = plotData.position[ji][k]; if (!isNaN(p)) { yMinPos = Math.min(yMinPos, p); yMaxPos = Math.max(yMaxPos, p); }
     const tp = plotData.targetRaw[ji][k]; if (!isNaN(tp)) { yMinPos = Math.min(yMinPos, tp); yMaxPos = Math.max(yMaxPos, tp); }
-    const ts = plotData.targetSmooth[ji][k]; if (!isNaN(ts)) { yMinPos = Math.min(yMinPos, ts); yMaxPos = Math.max(yMaxPos, ts); }
     const c = plotData.current[ji][k]; if (!isNaN(c)) { yMinCur = Math.min(yMinCur, c); yMaxCur = Math.max(yMaxCur, c); }
     const t = plotData.cmdTorque[ji][k]; if (!isNaN(t)) { yMinCmd = Math.min(yMinCmd, t); yMaxCmd = Math.max(yMaxCmd, t); }
   }
@@ -525,7 +520,6 @@ function drawPlot() {
 
   drawLine(plotData.position[ji], tyPos, "#4caf50", 2);
   drawLine(plotData.targetRaw[ji], tyPos, "#2196f3", 1.5);
-  drawLine(plotData.targetSmooth[ji], tyPos, "#00bcd4", 1.5);
   drawLine(plotData.current[ji], tyCur, "#ff9800", 1.5);
   drawLine(plotData.cmdTorque[ji], tyCmd, "#e94560", 1.5);
 
