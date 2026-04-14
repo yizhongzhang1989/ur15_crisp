@@ -377,7 +377,7 @@ The workspace supports teleoperation of the UR15 using an [Alicia-D leader arm](
 
 ### Launch
 
-A complete session requires **7 terminals** (each needs `source install/setup.bash`):
+A complete session requires **7 terminals** (each needs `source install/setup.bash`), plus an optional 8th for VLA control:
 
 ```bash
 # Terminal 1: UR15 driver + CRISP controllers
@@ -400,6 +400,12 @@ ros2 launch camera_node ur15_cam_launch.py
 
 # Terminal 7: Data collection dashboard (port 8086)
 ros2 launch data_collection data_collection.launch.py
+
+# Terminal 8 (optional): VLA joint control dashboard (port 8091)
+ros2 launch joint_vla_control joint_vla_control.launch.py
+
+# Terminal 9 (optional): VLA with history action joint control dashboard (port 8092)
+ros2 launch joint_history_vla_control joint_history_vla_control.launch.py
 ```
 
 ### Controlling the Robot

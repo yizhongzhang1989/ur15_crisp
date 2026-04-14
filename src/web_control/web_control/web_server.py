@@ -5,6 +5,7 @@ monitoring robot status, and commanding motion.
 """
 
 import json
+import math
 import os
 import shutil
 import threading
@@ -16,7 +17,7 @@ import rclpy
 import yaml
 from flask import Flask, Response, jsonify, request, send_from_directory
 from sensor_msgs.msg import JointState
-from std_msgs.msg import UInt8
+from std_msgs.msg import UInt8, Float64MultiArray
 from geometry_msgs.msg import WrenchStamped
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -41,6 +42,29 @@ def _find_workspace_config():
         return path
     except RuntimeError:
         return None
+
+
+def _load_position_control_config():
+    """Load position control config, creating from template if needed."""
+    try:
+        user_config = get_config_path("position_control.yaml")
+    except RuntimeError:
+        return {}
+    if not os.path.isfile(user_config):
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            template = os.path.join(
+                get_package_share_directory("web_control"), "config", "position_control_template.yaml"
+            )
+            if os.path.isfile(template):
+                shutil.copy2(template, user_config)
+                print(f"[web_control] Created position_control.yaml from template: {user_config}")
+        except Exception:
+            pass
+    if os.path.isfile(user_config):
+        with open(user_config, "r") as f:
+            return yaml.safe_load(f) or {}
+    return {}
 
 
 def _set_nested(d: dict, keys: list, value):
@@ -123,6 +147,43 @@ class WebControlServer:
                 callback_group=ReentrantCallbackGroup(),
             )
 
+        # Joint command target pipeline: raw → controllers
+        self._cmd_target_pub = self.robot.node.create_publisher(
+            JointState, "/cmd_target_joint", 10
+        )
+        self._fwd_pos_pub = self.robot.node.create_publisher(
+            Float64MultiArray, "/forward_position_controller/commands", 10
+        )
+        self._cmd_target_raw = None     # latest raw target (set by API/teleop)
+        # Load position control config for forward_position_controller trapezoidal profile
+        pos_cfg = _load_position_control_config()
+        joint_names = [
+            "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+            "wrist_1_joint", "wrist_2_joint", "wrist_3_joint",
+        ]
+        vel_cfg = pos_cfg.get("fwd_pos_max_vel", {})
+        accel_cfg = pos_cfg.get("fwd_pos_max_accel", {})
+        decel_cfg = pos_cfg.get("fwd_pos_max_decel", {})
+        default_vel = [2.0, 2.0, 2.0, 4.0, 4.0, 4.0]
+        default_accel = [6.0, 6.0, 6.0, 12.0, 12.0, 12.0]
+        default_decel = [4.0, 4.0, 4.0, 8.0, 8.0, 8.0]
+        self._fwd_pos_max_vel = np.array([
+            vel_cfg.get(jn, dv) for jn, dv in zip(joint_names, default_vel)
+        ])
+        self._fwd_pos_max_accel = np.array([
+            accel_cfg.get(jn, da) for jn, da in zip(joint_names, default_accel)
+        ])
+        self._fwd_pos_max_decel = np.array([
+            decel_cfg.get(jn, dd) for jn, dd in zip(joint_names, default_decel)
+        ])
+        self._fwd_pos_prev = None    # previous position command
+        self._fwd_pos_vel = None     # current velocity state (rad/s)
+        self._fwd_pos_time = None    # timestamp of last tick
+        # 250 Hz timer to continuously publish raw and feed controllers
+        self._cmd_pub_timer = self.robot.node.create_timer(
+            0.004, self._cmd_pub_timer_cb, callback_group=ReentrantCallbackGroup()
+        )
+
         # Publisher for gripper servo control
         self._gripper_pub = self.robot.node.create_publisher(UInt8, "/gripper/target_position", 10)
         # Timer at 5 Hz for gripper level control
@@ -161,7 +222,7 @@ class WebControlServer:
                 "pos": [round(float(v), 5) for v in pos],
                 "eff": [round(float(v), 3) for v in eff],
                 "cmd": [round(float(v), 4) for v in self._commanded_torques] if self._commanded_torques is not None else [],
-                "tgt": [round(float(v), 5) for v in self._target_joints] if self._target_joints is not None else [],
+                "tgt_raw": [round(float(v), 5) for v in self._cmd_target_raw] if self._cmd_target_raw is not None else [],
             }
             with self._plot_lock:
                 self._plot_buffer.append(sample)
@@ -198,7 +259,7 @@ class WebControlServer:
         self._gripper_raw = float(msg.gripper)
         if self._alicia_teleop and self._ready:
             target = self._alicia_joints * self._alicia_scale + self._alicia_offset
-            self.robot.set_target_joint(target)
+            self._set_cmd_target(target)
 
     def _gripper_timer_cb(self):
         """Send gripper command at 5 Hz when teleop is active, with 25-level hysteresis."""
@@ -228,6 +289,79 @@ class WebControlServer:
         gripper_msg = UInt8()
         gripper_msg.data = pos
         self._gripper_pub.publish(gripper_msg)
+
+    def _cmd_target_raw_cb(self, msg: JointState):
+        """Receive raw target joints from /cmd_target_joint."""
+        names = self.robot.config.joint_names
+        targets = [0.0] * len(names)
+        for jname, pos in zip(msg.name, msg.position):
+            if jname in names:
+                targets[names.index(jname)] = pos
+        self._cmd_target_raw = targets
+
+    def _cmd_pub_timer_cb(self):
+        """Continuously publish raw target and feed controllers at 250 Hz."""
+        if not rclpy.ok():
+            return
+        stamp = self.robot.node.get_clock().now().to_msg()
+        raw = self._cmd_target_raw
+        if raw is None:
+            return
+        raw_msg = JointState()
+        raw_msg.header.stamp = stamp
+        raw_msg.name = self.robot.config.joint_names
+        raw_msg.position = [float(j) for j in raw]
+        self._cmd_target_pub.publish(raw_msg)
+        # Feed to joint impedance controller
+        self.robot.set_target_joint(np.array(raw))
+        # Feed to forward position controller with trapezoidal velocity profile
+        now = time.monotonic()
+        if self._fwd_pos_prev is None:
+            joints = self.robot.joint_values
+            self._fwd_pos_prev = np.array(joints if joints is not None else raw, dtype=float)
+            self._fwd_pos_vel = np.zeros(6)
+            self._fwd_pos_time = now
+        dt = now - self._fwd_pos_time
+        dt = max(dt, 1e-6)  # avoid division by zero
+        self._fwd_pos_time = now
+        target = np.array(raw, dtype=float)
+        pos_err = target - self._fwd_pos_prev
+        # Compute braking velocity using deceleration limit
+        # v_brake = sqrt(2 * decel * |distance|)
+        dist = np.abs(pos_err)
+        v_brake = np.sqrt(2.0 * self._fwd_pos_max_decel * dist)
+        # Desired velocity: min of v_max and v_brake, with correct sign
+        v_limit = np.minimum(self._fwd_pos_max_vel, v_brake)
+        v_desired = np.sign(pos_err) * v_limit
+        # For very small errors, set desired to zero to avoid jitter
+        v_desired = np.where(dist < 1e-6, 0.0, v_desired)
+        # Limit velocity change: use accel when speeding up, decel when slowing down
+        dv = v_desired - self._fwd_pos_vel
+        # Per-joint: speeding up if |v_desired| > |v_prev|, else slowing down
+        speeding_up = np.abs(v_desired) > np.abs(self._fwd_pos_vel)
+        dv_max = np.where(speeding_up, self._fwd_pos_max_accel * dt, self._fwd_pos_max_decel * dt)
+        dv = np.clip(dv, -dv_max, dv_max)
+        self._fwd_pos_vel = self._fwd_pos_vel + dv
+        # Clamp velocity by v_max
+        self._fwd_pos_vel = np.clip(self._fwd_pos_vel, -self._fwd_pos_max_vel, self._fwd_pos_max_vel)
+        # Apply position step
+        pos_cmd = self._fwd_pos_prev + self._fwd_pos_vel * dt
+        # Don't overshoot target
+        for i in range(6):
+            if self._fwd_pos_vel[i] > 0 and pos_cmd[i] > target[i]:
+                pos_cmd[i] = target[i]
+                self._fwd_pos_vel[i] = 0.0
+            elif self._fwd_pos_vel[i] < 0 and pos_cmd[i] < target[i]:
+                pos_cmd[i] = target[i]
+                self._fwd_pos_vel[i] = 0.0
+        self._fwd_pos_prev = pos_cmd.copy()
+        fwd_msg = Float64MultiArray()
+        fwd_msg.data = pos_cmd.tolist()
+        self._fwd_pos_pub.publish(fwd_msg)
+
+    def _set_cmd_target(self, joints):
+        """Set raw joint target."""
+        self._cmd_target_raw = [float(j) for j in joints]
 
     def _wait_for_robot(self):
         try:
@@ -399,7 +533,21 @@ class WebControlServer:
             data = request.get_json()
             try:
                 joints = np.array(data["joints"], dtype=float)
-                self.robot.set_target_joint(joints)
+                self._set_cmd_target(joints)
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/set_position_joint", methods=["POST"])
+        def set_position_joint():
+            """Send joint positions via cmd_target_joint pipeline.
+            Body: {"joints": [q1, ..., q6]}"""
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json()
+            try:
+                joints = np.array(data["joints"], dtype=float)
+                self._set_cmd_target(joints)
                 return jsonify({"success": True})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
@@ -510,6 +658,52 @@ class WebControlServer:
             exists = config_path is not None and os.path.isfile(config_path)
             return jsonify({"user_config_exists": exists, "path": config_path or ""})
 
+        @app.route("/api/pos_control_params")
+        def get_pos_control_params():
+            """Get current position control parameters."""
+            jn = self.robot.config.joint_names
+            return jsonify({
+                "fwd_pos_max_vel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_vel)},
+                "fwd_pos_max_accel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_accel)},
+                "fwd_pos_max_decel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_decel)},
+            })
+
+        @app.route("/api/pos_control_params", methods=["POST"])
+        def set_pos_control_params():
+            """Update position control parameters at runtime. Body: {"fwd_pos_max_vel": {...}, ...}"""
+            data = request.get_json()
+            jn = self.robot.config.joint_names
+            if "fwd_pos_max_vel" in data:
+                for n, v in data["fwd_pos_max_vel"].items():
+                    if n in jn:
+                        self._fwd_pos_max_vel[jn.index(n)] = float(v)
+            if "fwd_pos_max_accel" in data:
+                for n, v in data["fwd_pos_max_accel"].items():
+                    if n in jn:
+                        self._fwd_pos_max_accel[jn.index(n)] = float(v)
+            if "fwd_pos_max_decel" in data:
+                for n, v in data["fwd_pos_max_decel"].items():
+                    if n in jn:
+                        self._fwd_pos_max_decel[jn.index(n)] = float(v)
+            return jsonify({"success": True})
+
+        @app.route("/api/pos_control_params/save", methods=["POST"])
+        def save_pos_control_params():
+            """Save current position control parameters to config/position_control.yaml."""
+            try:
+                config_path = get_config_path("position_control.yaml")
+            except RuntimeError:
+                return jsonify({"error": "Cannot find workspace config/ directory"}), 500
+            jn = self.robot.config.joint_names
+            cfg = {
+                "fwd_pos_max_vel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_vel)},
+                "fwd_pos_max_accel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_accel)},
+                "fwd_pos_max_decel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_decel)},
+            }
+            with open(config_path, "w") as f:
+                yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+            return jsonify({"success": True, "path": config_path})
+
         @app.route("/api/move_to", methods=["POST"])
         def move_to():
             """Linearly interpolate to a target pose using crisp_py's move_to."""
@@ -569,7 +763,7 @@ class WebControlServer:
                                 "force_mag": round(float(np.linalg.norm(self._ft_force)), 2),
                             },
                             "cmd_torques": [round(float(v), 3) for v in self._commanded_torques] if self._commanded_torques is not None else [],
-                            "target_joints": [round(float(v), 4) for v in self._target_joints] if self._target_joints is not None else [],
+                            "cmd_target_raw": [round(float(v), 4) for v in self._cmd_target_raw] if self._cmd_target_raw is not None else [],
                             "alicia_joints": [round(float(v), 4) for v in self._alicia_joints] if self._alicia_joints is not None else [],
                             "alicia_teleop": self._alicia_teleop,
                             "gripper_raw": round(float(self._gripper_raw), 1) if self._gripper_raw is not None else None,

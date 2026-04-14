@@ -168,8 +168,8 @@
       </div>
       <div id="tab-joint" class="tab-content">
         <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center;">
-          <button id="btnJointCtrl" class="btn-send" onclick="toggleJointController()" style="padding:8px 20px;">Enable Joint Controller</button>
-          <span id="jointCtrlStatus" style="font-size:0.9em; color:var(--dim);">Checking...</span>
+          <button id="btnJointCtrl" class="btn-send" onclick="toggleJointController('impedance')" style="padding:8px 20px;">Enable Joint Impedance Controller</button>
+          <button id="btnJointTrajCtrl" class="btn-send" onclick="toggleJointController('trajectory')" style="padding:8px 20px;">Enable Joint Position Controller</button>
         </div>
         <div id="jointSliderContainer"></div>
         <div class="btn-row" style="margin-top:8px;">
@@ -194,7 +194,7 @@
     <h2>Controller Parameters</h2>
     <div class="step-row" style="margin-bottom:10px;"><label>Controller:</label>
       <select id="paramCtrlSelect" onchange="loadParams()" style="padding:4px 8px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;min-width:250px;">
-        <option value="">-- select --</option><option value="gravity_compensation">gravity_compensation</option><option value="cartesian_impedance_controller">cartesian_impedance_controller</option><option value="joint_impedance_controller">joint_impedance_controller</option>
+        <option value="">-- select --</option><option value="gravity_compensation">gravity_compensation</option><option value="cartesian_impedance_controller">cartesian_impedance_controller</option><option value="joint_impedance_controller">joint_impedance_controller</option><option value="forward_position_controller">forward_position_controller</option>
       </select><button class="btn-send" onclick="loadParams()" style="margin-left:4px;">Refresh</button>
     </div><div id="paramsContainer" style="max-height:400px;overflow-y:auto;"></div>
     <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
@@ -208,8 +208,8 @@
 <script>
 const JN=["shoulder_pan","shoulder_lift","elbow","wrist_1","wrist_2","wrist_3"];
 let latestPose=null, latestJoints=null;
-function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.target_joints||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}if(d.alicia_teleop){document.getElementById("teleopStatus").textContent="ACTIVE";document.getElementById("teleopStatus").style.color="var(--green)";}else{document.getElementById("teleopStatus").textContent="Inactive";document.getElementById("teleopStatus").style.color="var(--dim)";}if(d.gripper_raw!==null&&d.gripper_raw!==undefined){document.getElementById("teleopGripperRaw").textContent=d.gripper_raw.toFixed(0);}if(d.gripper_level!==null&&d.gripper_level!==undefined){document.getElementById("teleopGripperLevel").textContent=d.gripper_level;document.getElementById("teleopGripperPos").textContent=Math.round(d.gripper_level*255/24);}if(d.alicia_joints&&d.alicia_joints.length){document.getElementById("teleopJoints").textContent=d.alicia_joints.map(v=>(v*180/Math.PI).toFixed(1)+'\u00b0').join(', ');}pushPlotData(d);updateJointSlidersCurrent();if(d.alicia_joints!==undefined)updateAliciaDisplay(d.alicia_joints,d.alicia_teleop);};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
-function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");const jic=d.controllers.find(c=>c.name==="joint_impedance_controller");jointControllerActive=jic&&jic.state==="active";updateJointCtrlBtn();}).catch(()=>{});}
+function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.cmd_target_raw||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}if(d.alicia_teleop){document.getElementById("teleopStatus").textContent="ACTIVE";document.getElementById("teleopStatus").style.color="var(--green)";}else{document.getElementById("teleopStatus").textContent="Inactive";document.getElementById("teleopStatus").style.color="var(--dim)";}if(d.gripper_raw!==null&&d.gripper_raw!==undefined){document.getElementById("teleopGripperRaw").textContent=d.gripper_raw.toFixed(0);}if(d.gripper_level!==null&&d.gripper_level!==undefined){document.getElementById("teleopGripperLevel").textContent=d.gripper_level;document.getElementById("teleopGripperPos").textContent=Math.round(d.gripper_level*255/24);}if(d.alicia_joints&&d.alicia_joints.length){document.getElementById("teleopJoints").textContent=d.alicia_joints.map(v=>(v*180/Math.PI).toFixed(1)+'\u00b0').join(', ');}pushPlotData(d);updateJointSlidersCurrent();if(d.alicia_joints!==undefined)updateAliciaDisplay(d.alicia_joints,d.alicia_teleop);};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
+function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");const jic=d.controllers.find(c=>c.name==="joint_impedance_controller");jointControllerActive=jic&&jic.state==="active";const jtc=d.controllers.find(c=>c.name==="forward_position_controller");jointTrajControllerActive=jtc&&jtc.state==="active";if(jointControllerActive)jointControlMode='impedance';else if(jointTrajControllerActive)jointControlMode='trajectory';else jointControlMode=null;updateJointCtrlBtns();}).catch(()=>{});}
 function switchCtrl(n){const l=document.getElementById("ctrlLog");l.innerHTML=`<div>Switching to ${n}...</div>`;fetch("/api/switch_controller",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({controller:n})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Switched to ${n}</div>`:`<div class="err">${d.error}</div>`;refreshControllers();}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 function moveDelta(sx,sy,sz){const s=parseFloat(document.getElementById("stepSize").value)||0.02,l=document.getElementById("moveLog");fetch("/api/move_delta",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dx:sx*s,dy:sy*s,dz:sz*s})}).then(r=>r.json()).then(d=>{if(d.success){const p=d.new_position;l.innerHTML=`<div class="ok">Target: (${p.x}, ${p.y}, ${p.z})</div>`;}else l.innerHTML=`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 function copyCurrentPose(){if(!latestPose)return;document.getElementById("tx").value=latestPose.x;document.getElementById("ty").value=latestPose.y;document.getElementById("tz").value=latestPose.z;document.getElementById("tqx").value=latestPose.qx;document.getElementById("tqy").value=latestPose.qy;document.getElementById("tqz").value=latestPose.qz;document.getElementById("tqw").value=latestPose.qw;}
@@ -368,14 +368,14 @@ function updateAliciaDisplay(aliciaJoints, teleop) {
 }
 const KEY_PARAMS={'Task Stiffness':['task.k_pos_x','task.k_pos_y','task.k_pos_z','task.k_rot_x','task.k_rot_y','task.k_rot_z'],'Task Damping':['task.d_pos_x','task.d_pos_y','task.d_pos_z','task.d_rot_x','task.d_rot_y','task.d_rot_z'],'Nullspace':['nullspace.stiffness','nullspace.damping','nullspace.max_tau'],'Filters':['filter.q','filter.dq','filter.output_torque','filter.target_pose'],'Safety':['max_delta_tau','limit_torques','limit_error','stop_commands']};
 let currentParams={};
-function loadParams(){const c=document.getElementById("paramCtrlSelect").value,ct=document.getElementById("paramsContainer"),l=document.getElementById("paramLog");if(!c){ct.innerHTML="";return;}ct.innerHTML='<div style="color:var(--dim)">Loading...</div>';fetch(`/api/params/${c}`).then(r=>r.json()).then(d=>{if(d.error){ct.innerHTML=`<div class="err">${d.error}</div>`;return;}currentParams=d.params;renderParams(c,d.params);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});}
+function loadParams(){const c=document.getElementById("paramCtrlSelect").value,ct=document.getElementById("paramsContainer"),l=document.getElementById("paramLog");if(!c){ct.innerHTML="";return;}ct.innerHTML='<div style="color:var(--dim)">Loading...</div>';if(c==="forward_position_controller"){fetch("/api/pos_control_params").then(r=>r.json()).then(d=>{renderPosParams(d);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});return;}fetch(`/api/params/${c}`).then(r=>r.json()).then(d=>{if(d.error){ct.innerHTML=`<div class="err">${d.error}</div>`;return;}currentParams=d.params;renderParams(c,d.params);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});}
 function renderParams(c,p){const ct=document.getElementById("paramsContainer");let h='';const rd=new Set();for(const[g,ks]of Object.entries(KEY_PARAMS)){const m=ks.filter(k=>k in p);if(!m.length)continue;h+=`<div class="param-group"><div class="param-group-title">${g}</div>`;for(const k of m){h+=paramRowHtml(c,k,p[k]);rd.add(k);}h+='</div>';}const rm=Object.keys(p).filter(k=>!rd.has(k)).sort();if(rm.length){h+='<div class="param-group"><div class="param-group-title">Other Parameters</div>';for(const k of rm)h+=paramRowHtml(c,k,p[k]);h+='</div>';}ct.innerHTML=h;}
 function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_;return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${ib?'bool':in_?'num':t}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}',${ib})">Set</button>`:''}</div>`;}
 function setParam(c,n,id,ib){const el=document.getElementById(id);let v=ib?el.value==='true':parseFloat(el.value);if(!ib&&isNaN(v)){document.getElementById("paramLog").innerHTML='<div class="err">Invalid number</div>';return;}const l=document.getElementById("paramLog");l.innerHTML=`<div>Setting ${n} = ${v}...</div>`;fetch(`/api/params/${c}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({params:{[n]:v}})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Set ${n} = ${v}</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 
 // === Real-time Plot ===
 const PLOT_MAX_SAMPLES = 6000; // 60s at ~100Hz
-let plotData = { time: [], position: Array.from({length:6},()=>[]), targetPos: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
+let plotData = { time: [], position: Array.from({length:6},()=>[]), targetRaw: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
 let plotFrozen = false;
 let plotFrozenTMin = 0, plotFrozenTMax = 10;
 let plotBaseTime = 0; // first ROS timestamp for relative time
@@ -391,7 +391,7 @@ function pushPlotData(d) {
       plotData.time.push(t);
       for (let i = 0; i < 6; i++) {
         plotData.position[i].push(s.pos[i] !== undefined ? s.pos[i] * 180 / Math.PI : NaN);
-        plotData.targetPos[i].push(s.tgt && s.tgt[i] !== undefined ? s.tgt[i] * 180 / Math.PI : NaN);
+        plotData.targetRaw[i].push(s.tgt_raw && s.tgt_raw[i] !== undefined ? s.tgt_raw[i] * 180 / Math.PI : NaN);
         plotData.current[i].push(s.eff && s.eff[i] !== undefined ? s.eff[i] : NaN);
         plotData.cmdTorque[i].push(s.cmd && s.cmd[i] !== undefined ? s.cmd[i] : NaN);
       }
@@ -400,10 +400,10 @@ function pushPlotData(d) {
     // Fallback: use single sample from SSE data
     const t = plotData.time.length > 0 ? plotData.time[plotData.time.length - 1] + 0.1 : 0;
     plotData.time.push(t);
-    const tgt = d.target_joints || [];
+    const tgt = d.cmd_target_raw || [];
     for (let i = 0; i < 6; i++) {
       plotData.position[i].push(d.joints[i] !== undefined ? d.joints[i] * 180 / Math.PI : NaN);
-      plotData.targetPos[i].push(tgt[i] !== undefined ? tgt[i] * 180 / Math.PI : NaN);
+      plotData.targetRaw[i].push(tgt[i] !== undefined ? tgt[i] * 180 / Math.PI : NaN);
       plotData.current[i].push(d.effort && d.effort[i] !== undefined ? d.effort[i] : NaN);
       plotData.cmdTorque[i].push(d.cmd_torques && d.cmd_torques[i] !== undefined ? d.cmd_torques[i] : NaN);
     }
@@ -411,7 +411,7 @@ function pushPlotData(d) {
   // Trim to max samples
   while (plotData.time.length > PLOT_MAX_SAMPLES) {
     plotData.time.shift();
-    for (let i = 0; i < 6; i++) { plotData.position[i].shift(); plotData.targetPos[i].shift(); plotData.current[i].shift(); plotData.cmdTorque[i].shift(); }
+    for (let i = 0; i < 6; i++) { plotData.position[i].shift(); plotData.targetRaw[i].shift(); plotData.current[i].shift(); plotData.cmdTorque[i].shift(); }
   }
 }
 
@@ -428,7 +428,7 @@ function toggleFreeze() {
 }
 
 function clearPlot() {
-  plotData = { time: [], position: Array.from({length:6},()=>[]), targetPos: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
+  plotData = { time: [], position: Array.from({length:6},()=>[]), targetRaw: Array.from({length:6},()=>[]), current: Array.from({length:6},()=>[]), cmdTorque: Array.from({length:6},()=>[]) };
   plotBaseTime = 0;
 }
 
@@ -458,7 +458,7 @@ function drawPlot() {
   for (let k = 0; k < plotData.time.length; k++) {
     if (plotData.time[k] < tMin || plotData.time[k] > tMax) continue;
     const p = plotData.position[ji][k]; if (!isNaN(p)) { yMinPos = Math.min(yMinPos, p); yMaxPos = Math.max(yMaxPos, p); }
-    const tp = plotData.targetPos[ji][k]; if (!isNaN(tp)) { yMinPos = Math.min(yMinPos, tp); yMaxPos = Math.max(yMaxPos, tp); }
+    const tp = plotData.targetRaw[ji][k]; if (!isNaN(tp)) { yMinPos = Math.min(yMinPos, tp); yMaxPos = Math.max(yMaxPos, tp); }
     const c = plotData.current[ji][k]; if (!isNaN(c)) { yMinCur = Math.min(yMinCur, c); yMaxCur = Math.max(yMaxCur, c); }
     const t = plotData.cmdTorque[ji][k]; if (!isNaN(t)) { yMinCmd = Math.min(yMinCmd, t); yMaxCmd = Math.max(yMaxCmd, t); }
   }
@@ -519,7 +519,7 @@ function drawPlot() {
   }
 
   drawLine(plotData.position[ji], tyPos, "#4caf50", 2);
-  drawLine(plotData.targetPos[ji], tyPos, "#2196f3", 1.5);
+  drawLine(plotData.targetRaw[ji], tyPos, "#2196f3", 1.5);
   drawLine(plotData.current[ji], tyCur, "#ff9800", 1.5);
   drawLine(plotData.cmdTorque[ji], tyCmd, "#e94560", 1.5);
 
@@ -528,7 +528,12 @@ function drawPlot() {
 
 // --- Config Save/Reset ---
 function saveConfig() {
+  const c = document.getElementById("paramCtrlSelect").value;
   const l = document.getElementById("paramLog");
+  if (c === "forward_position_controller") {
+    savePosParamsToDisk();
+    return;
+  }
   l.innerHTML = '<div>Saving config...</div>';
   fetch("/api/save_config", { method: "POST" }).then(r => r.json()).then(d => {
     if (d.success) l.innerHTML = `<div class="ok">Saved to ${d.path} (${d.changed} values updated). Takes effect on next launch.</div>`;
@@ -553,6 +558,47 @@ function checkConfigStatus() {
   }).catch(() => {});
 }
 
+// --- Position Control Parameters ---
+let posParamsData = {};
+
+function renderPosParams(d) {
+  const ct = document.getElementById("paramsContainer");
+  posParamsData = d;
+  let h = '';
+  for (const [group, params] of Object.entries(d)) {
+    if (typeof params !== 'object' || params === null) continue;
+    const label = group.replace(/_/g, ' ');
+    h += `<div class="param-group"><div class="param-group-title">${label}</div>`;
+    for (const [jn, val] of Object.entries(params)) {
+      const shortName = jn.replace('_joint','');
+      const id = `pp_${group}_${jn.replace(/\./g,'_')}`;
+      h += `<div class="param-row"><span class="pname">${shortName}</span><input type="number" id="${id}" value="${val}" step="any"><span class="ptype">num</span><button class="pbtn" onclick="setPosParam('${group}','${jn}','${id}')">Set</button></div>`;
+    }
+    h += '</div>';
+  }
+  ct.innerHTML = h || '<div style="color:var(--dim)">No parameters</div>';
+}
+
+function setPosParam(group, jn, id) {
+  const val = parseFloat(document.getElementById(id).value);
+  if (isNaN(val) || val <= 0) { document.getElementById("paramLog").innerHTML = '<div class="err">Invalid value (must be > 0)</div>'; return; }
+  const l = document.getElementById("paramLog");
+  l.innerHTML = `<div>Setting ${group}.${jn} = ${val}...</div>`;
+  fetch("/api/pos_control_params", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({[group]: {[jn]: val}})})
+    .then(r=>r.json()).then(d=>{
+      l.innerHTML = d.success ? `<div class="ok">Set ${jn} = ${val}</div>` : `<div class="err">${d.error}</div>`;
+    }).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});
+}
+
+function savePosParamsToDisk() {
+  const l = document.getElementById("paramLog");
+  l.innerHTML = '<div>Saving position control params...</div>';
+  fetch("/api/pos_control_params/save", {method:"POST"}).then(r=>r.json()).then(d=>{
+    if (d.success) l.innerHTML = `<div class="ok">Saved to ${d.path}</div>`;
+    else l.innerHTML = `<div class="err">${d.error}</div>`;
+  }).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});
+}
+
 // --- Tab Switching ---
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -563,39 +609,47 @@ function switchTab(tab) {
 
 // --- Joint Controller Toggle ---
 let jointControllerActive = false;
+let jointTrajControllerActive = false;
+let jointControlMode = null; // null, 'impedance', or 'trajectory'
 let jointSendingActive = false;
 
-function updateJointCtrlBtn() {
-  const btn = document.getElementById("btnJointCtrl");
-  const status = document.getElementById("jointCtrlStatus");
+function updateJointCtrlBtns() {
+  const btnImp = document.getElementById("btnJointCtrl");
+  const btnTraj = document.getElementById("btnJointTrajCtrl");
   if (jointControllerActive) {
-    btn.textContent = "Disable Joint Controller";
-    btn.style.background = "var(--green)";
-    status.textContent = "Joint impedance controller: active";
-    status.style.color = "var(--green)";
+    btnImp.textContent = "Disable Joint Impedance Controller";
+    btnImp.style.background = "var(--green)";
   } else {
-    btn.textContent = "Enable Joint Controller";
-    btn.style.background = "var(--accent)";
-    status.textContent = "Joint impedance controller: inactive";
-    status.style.color = "var(--dim)";
+    btnImp.textContent = "Enable Joint Impedance Controller";
+    btnImp.style.background = "var(--accent)";
+  }
+  if (jointTrajControllerActive) {
+    btnTraj.textContent = "Disable Joint Position Controller";
+    btnTraj.style.background = "var(--green)";
+  } else {
+    btnTraj.textContent = "Enable Joint Position Controller";
+    btnTraj.style.background = "var(--accent)";
   }
 }
 
-function toggleJointController() {
+function toggleJointController(mode) {
   const log = document.getElementById("jointLog");
-  if (!jointControllerActive) {
-    log.innerHTML = '<div>Activating joint_impedance_controller...</div>';
-    fetch("/api/switch_controller", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({controller:"joint_impedance_controller"})})
+  const isImpedance = mode === 'impedance';
+  const ctrlName = isImpedance ? "joint_impedance_controller" : "forward_position_controller";
+  const isActive = isImpedance ? jointControllerActive : jointTrajControllerActive;
+  if (!isActive) {
+    log.innerHTML = `<div>Activating ${ctrlName}...</div>`;
+    fetch("/api/switch_controller", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({controller:ctrlName})})
       .then(r => r.json()).then(d => {
-        if (d.success) { log.innerHTML = '<div class="ok">Joint controller activated</div>'; }
+        if (d.success) { log.innerHTML = `<div class="ok">${ctrlName} activated</div>`; }
         else { log.innerHTML = `<div class="err">${d.error}</div>`; }
         refreshControllers();
       }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
   } else {
-    log.innerHTML = '<div>Switching to scaled_joint_trajectory_controller...</div>';
+    log.innerHTML = `<div>Deactivating ${ctrlName}...</div>`;
     fetch("/api/switch_controller", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({controller:"scaled_joint_trajectory_controller"})})
       .then(r => r.json()).then(d => {
-        if (d.success) { log.innerHTML = '<div class="ok">Joint controller deactivated</div>'; }
+        if (d.success) { log.innerHTML = `<div class="ok">${ctrlName} deactivated</div>`; }
         else { log.innerHTML = `<div class="err">${d.error}</div>`; }
         refreshControllers();
       }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });

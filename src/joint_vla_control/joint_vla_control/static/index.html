@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VLA Joint Control — UR15</title>
+<style>
+  :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --highlight: #e94560; --text: #eee; --dim: #888; --green: #4caf50; --orange: #ff9800; --blue: #2196f3; --cyan: #00bcd4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .header { background: #0d1525; padding: 10px 16px; border-bottom: 2px solid var(--accent); text-align: center; }
+  .header h1 { font-size: 1.2em; } .header h1 span { color: var(--highlight); }
+  .content { padding: 12px; display: grid; grid-template-columns: 400px 1fr; gap: 12px; }
+  .card { background: var(--card); border-radius: 8px; padding: 16px; }
+  .card h2 { font-size: 0.95em; color: var(--dim); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  label { color: var(--dim); font-size: 0.9em; }
+  input[type=text], input[type=url], textarea { width: 100%; padding: 6px 10px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 4px; font-family: monospace; font-size: 0.9em; }
+  textarea { resize: vertical; min-height: 60px; }
+  .btn { padding: 8px 18px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; color: #fff; }
+  .btn-blue { background: var(--blue); } .btn-green { background: var(--green); } .btn-orange { background: var(--orange); } .btn-red { background: var(--highlight); } .btn-dim { background: var(--accent); color: var(--dim); }
+  .btn:hover { filter: brightness(1.2); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .status-line { font-family: monospace; font-size: 0.85em; color: var(--dim); margin-top: 6px; }
+  .status-line .val { color: var(--text); }
+  .status-line .ok { color: var(--green); } .status-line .warn { color: var(--orange); }
+  #camImage { width: 100%; border-radius: 6px; background: #000; min-height: 200px; }
+  .exec-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .exec-btns .btn { flex: 1; min-width: 80px; text-align: center; }
+  .log { font-family: monospace; font-size: 0.8em; color: var(--dim); max-height: 80px; overflow-y: auto; margin-top: 8px; }
+  .log .err { color: var(--highlight); } .log .ok { color: var(--green); }
+
+  /* Trajectory table */
+  .traj-table { font-family: monospace; font-size: 0.8em; border-collapse: collapse; width: 100%; max-height: 250px; overflow-y: auto; display: block; }
+  .traj-table th { color: var(--dim); font-weight: normal; text-align: left; padding: 2px 6px; position: sticky; top: 0; background: var(--card); }
+  .traj-table td { padding: 2px 6px; }
+  .traj-table tr.current { background: rgba(33,150,243,0.15); }
+  .traj-table tr.sent { color: var(--dim); }
+
+  /* Plot */
+  .plot-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .plot-row select, .plot-row input { padding: 4px 8px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 4px; font-family: monospace; }
+  .legend { display: flex; gap: 12px; font-size: 0.8em; font-family: monospace; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="header"><h1><span>VLA</span> Joint Control — UR15</h1></div>
+<div class="content">
+  <!-- Left column: config + camera + execution -->
+  <div style="display:flex; flex-direction:column; gap:12px;">
+    <div class="card">
+      <h2>Configuration</h2>
+      <label>VLA Server URL:</label>
+      <input type="url" id="vlaUrl" value="http://10.190.172.212:4500/api/inference">
+      <div style="margin-top:8px;"><label>Instruction:</label></div>
+      <textarea id="instruction">pick up the blue whiteboard eraser, erase all the drawings on the whiteboard, and then put the eraser back in its place</textarea>
+      <div class="row">
+        <button class="btn btn-blue" onclick="saveConfig()">Save Config</button>
+        <button class="btn btn-green" id="btnPredict" onclick="runPredict()">Run Prediction</button>
+      </div>
+      <div class="status-line" id="predStatus"></div>
+      <div class="log" id="predLog"></div>
+    </div>
+
+    <div class="card">
+      <h2>Camera</h2>
+      <img id="camImage" src="/api/image" alt="No camera image">
+      <div class="row"><button class="btn btn-dim" onclick="refreshImage()">Refresh</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Execution Control</h2>
+      <div class="exec-btns">
+        <button class="btn btn-red" onclick="execCmd('stopped')">Stop</button>
+        <button class="btn btn-orange" onclick="stepOnce()">Step Once</button>
+        <button class="btn btn-green" onclick="execCmd('continuous')">Continuous</button>
+        <button class="btn btn-dim" onclick="resetStep()">Reset Step</button>
+        <button class="btn btn-blue" id="btnAutoRun" onclick="toggleAutoRun()">Auto Run</button>
+      </div>
+      <div class="status-line">Mode: <span class="val" id="execMode">stopped</span> | Step: <span class="val" id="execStep">0</span> / <span class="val" id="execTotal">0</span> | <span id="autoRunStatus" style="color:var(--dim)"></span></div>
+    </div>
+
+    <div class="card">
+      <h2>Predicted Trajectory</h2>
+      <div id="trajContainer" style="max-height:300px; overflow-y:auto;">
+        <table class="traj-table" id="trajTable">
+          <thead><tr><th>#</th><th>J1</th><th>J2</th><th>J3</th><th>J4</th><th>J5</th><th>J6</th><th>Grip</th></tr></thead>
+          <tbody id="trajBody"><tr><td colspan="8" style="color:var(--dim)">No prediction yet</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right column: plot only -->
+  <div style="display:flex; flex-direction:column; gap:12px;">
+    <div class="card">
+      <h2>Joint Plot</h2>
+      <div class="plot-row">
+        <button class="btn btn-dim" onclick="clearPlot()">Clear</button>
+        <span class="legend">
+          <span style="color:#4caf50;">&#9632; Actual</span>
+          <span style="color:#2196f3;">&#9632; Predicted</span>
+        </span>
+      </div>
+      <div id="plotGrid" style="display:grid; grid-template-columns:1fr 1fr; gap:4px;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- Config ---
+function saveConfig() {
+  const url = document.getElementById("vlaUrl").value;
+  const inst = document.getElementById("instruction").value;
+  fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({vla_url:url, instruction:inst})})
+    .then(r=>r.json()).then(d=>{document.getElementById("predLog").innerHTML='<div class="ok">Config saved</div>';});
+}
+
+// --- Predict ---
+function runPredict() {
+  const btn = document.getElementById("btnPredict");
+  const log = document.getElementById("predLog");
+  btn.disabled = true;
+  log.innerHTML = '<div>Running inference...</div>';
+  fetch("/api/predict", {method:"POST"})
+    .then(r=>r.json()).then(d=>{
+      btn.disabled = false;
+      if(d.error){log.innerHTML=`<div class="err">${d.error}</div>`;}
+      else{log.innerHTML=`<div class="ok">Predicted ${d.chunk_size} frames</div>`;loadTrajectory();}
+    }).catch(e=>{btn.disabled=false;log.innerHTML=`<div class="err">${e}</div>`;});
+}
+
+// --- Trajectory table ---
+function loadTrajectory() {
+  fetch("/api/prediction").then(r=>r.json()).then(d=>{
+    if(!d.available){document.getElementById("trajBody").innerHTML='<tr><td colspan="8" style="color:var(--dim)">No prediction</td></tr>';return;}
+    const joints = d.joints;
+    const grip = d.gripper || null;
+    const step = d.step;
+    document.getElementById("trajBody").innerHTML = joints.map((j,i)=>{
+      const cls = i < step ? "sent" : i === step ? "current" : "";
+      const g = grip ? grip[i][0].toFixed(3) : "—";
+      return `<tr class="${cls}"><td>${i}</td>${j.map(v=>`<td>${(v*180/Math.PI).toFixed(1)}</td>`).join("")}<td>${g}</td></tr>`;
+    }).join("");
+  });
+}
+
+// --- Execution ---
+function execCmd(mode) {
+  fetch("/api/exec", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({mode})});
+}
+function stepOnce() {
+  fetch("/api/step", {method:"POST"}).then(()=>loadTrajectory());
+}
+function resetStep() {
+  fetch("/api/reset_step", {method:"POST"}).then(()=>loadTrajectory());
+}
+
+// --- Auto Run: predict → continuous → wait for completion → repeat ---
+let autoRunActive = false;
+let autoRunTimer = null;
+
+function toggleAutoRun() {
+  autoRunActive = !autoRunActive;
+  const btn = document.getElementById("btnAutoRun");
+  const st = document.getElementById("autoRunStatus");
+  if (autoRunActive) {
+    btn.textContent = "Stop Auto";
+    btn.className = "btn btn-red";
+    st.textContent = "Auto running...";
+    st.style.color = "var(--green)";
+    autoRunCycle();
+  } else {
+    btn.textContent = "Auto Run";
+    btn.className = "btn btn-blue";
+    st.textContent = "";
+    if (autoRunTimer) { clearTimeout(autoRunTimer); autoRunTimer = null; }
+    execCmd('stopped');
+  }
+}
+
+function autoRunCycle() {
+  if (!autoRunActive) return;
+  const st = document.getElementById("autoRunStatus");
+  st.textContent = "Predicting...";
+  // Step 1: Run prediction
+  fetch("/api/predict", {method:"POST"})
+    .then(r=>r.json()).then(d=>{
+      if (!autoRunActive) return;
+      if (d.error) {
+        st.textContent = "Error: " + d.error;
+        st.style.color = "var(--highlight)";
+        autoRunActive = false;
+        document.getElementById("btnAutoRun").textContent = "Auto Run";
+        document.getElementById("btnAutoRun").className = "btn btn-blue";
+        return;
+      }
+      loadTrajectory(); loadPredForPlot();
+      st.textContent = "Executing...";
+      // Step 2: Start continuous execution
+      execCmd('continuous');
+      // Step 3: Poll until execution finishes
+      autoRunPollCompletion();
+    }).catch(e=>{
+      if (!autoRunActive) return;
+      st.textContent = "Error: " + e;
+      st.style.color = "var(--highlight)";
+      autoRunActive = false;
+      document.getElementById("btnAutoRun").textContent = "Auto Run";
+      document.getElementById("btnAutoRun").className = "btn btn-blue";
+    });
+}
+
+function autoRunPollCompletion() {
+  if (!autoRunActive) return;
+  autoRunTimer = setTimeout(() => {
+    // Check if execution finished (mode switched to stopped, or step >= total)
+    const mode = document.getElementById("execMode").textContent;
+    const step = parseInt(document.getElementById("execStep").textContent) || 0;
+    const total = parseInt(document.getElementById("execTotal").textContent) || 0;
+    if (mode === "stopped" || (total > 0 && step >= total)) {
+      if (!autoRunActive) return;
+      document.getElementById("autoRunStatus").textContent = "Cycle complete, next prediction...";
+      // Start next cycle
+      autoRunTimer = setTimeout(autoRunCycle, 200);
+    } else {
+      autoRunPollCompletion();
+    }
+  }, 100);
+}
+
+// --- Camera ---
+function refreshImage() {
+  document.getElementById("camImage").src = "/api/image?" + Date.now();
+}
+setInterval(refreshImage, 2000);
+
+// --- SSE Stream + Plot data ---
+let predTrajectory = null;
+let actualHistory = [];
+let latestJoints = null;
+let latestStep = 0;
+let latestChunkSize = 0;
+
+function startStream() {
+  const es = new EventSource("/api/stream");
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    document.getElementById("execMode").textContent = d.exec_mode;
+    document.getElementById("execStep").textContent = d.pred_step;
+    document.getElementById("execTotal").textContent = d.pred_chunk_size;
+    latestStep = d.pred_step;
+    latestChunkSize = d.pred_chunk_size;
+    if (d.joints && d.joints.length) {
+      latestJoints = d.joints;
+      if (d.pred_step > 0 && predTrajectory) {
+        const step = d.pred_step - 1;
+        if (actualHistory.length === 0 || actualHistory[actualHistory.length - 1].step < step) {
+          actualHistory.push({step, joints: d.joints.slice()});
+        }
+      }
+    }
+  };
+}
+
+function clearPlot() { actualHistory = []; }
+
+function loadPredForPlot() {
+  fetch("/api/prediction").then(r=>r.json()).then(d=>{
+    if (!d.available) { predTrajectory = null; return; }
+    predTrajectory = {joints: d.joints, gripper: d.gripper || null};
+    actualHistory = [];
+  });
+}
+
+// Override runPredict to also load plot data
+const _origRP = window.runPredict;
+window.runPredict = function() {
+  const btn = document.getElementById("btnPredict");
+  const log = document.getElementById("predLog");
+  btn.disabled = true;
+  log.innerHTML = '<div>Running inference...</div>';
+  fetch("/api/predict", {method:"POST"})
+    .then(r=>r.json()).then(d=>{
+      btn.disabled = false;
+      if(d.error){log.innerHTML=`<div class="err">${d.error}</div>`;}
+      else{log.innerHTML=`<div class="ok">Predicted ${d.chunk_size} frames</div>`;loadTrajectory();loadPredForPlot();}
+    }).catch(e=>{btn.disabled=false;log.innerHTML=`<div class="err">${e}</div>`;});
+};
+
+// --- Plot: 2-column grid, frame-indexed ---
+const JN=["shoulder_pan","shoulder_lift","elbow","wrist_1","wrist_2","wrist_3"];
+const JCOLORS=["#e94560","#ff9800","#ffeb3b","#4caf50","#2196f3","#9c27b0"];
+const PLOT_LABELS=[...JN,"gripper"];
+const PLOT_COLORS=[...JCOLORS,"#ff69b4"];
+let plotCanvases=[];
+
+function initPlotCanvases(){
+  const grid=document.getElementById("plotGrid");
+  grid.innerHTML="";
+  plotCanvases=[];
+  for(let ji=0;ji<7;ji++){
+    const wrap=document.createElement("div");
+    wrap.style.cssText="background:#0d1420;border-radius:4px;border:1px solid #1a2a50;padding:2px 0;";
+    const c=document.createElement("canvas");
+    c.width=450;c.height=160;
+    c.style.cssText="width:100%;display:block;";
+    wrap.appendChild(c);
+    grid.appendChild(wrap);
+    plotCanvases.push(c);
+  }
+}
+
+function drawPlot(){
+  const pred=predTrajectory;
+  const chunkSize=pred?pred.joints.length:(latestChunkSize||30);
+  const fps=30;
+  // Compute max Y span across all 6 joints (same range width, different centers)
+  let gMaxSpan=0;
+  let jRanges=[];  // [{min,max,mid}] per joint
+  for(let ji=0;ji<6;ji++){
+    let lo=Infinity,hi=-Infinity;
+    if(pred){const arr=pred.joints.map(j=>j[ji]*180/Math.PI);for(const v of arr){if(!isNaN(v)){lo=Math.min(lo,v);hi=Math.max(hi,v);}}}
+    for(const a of actualHistory){const v=a.joints[ji]*180/Math.PI;if(!isNaN(v)){lo=Math.min(lo,v);hi=Math.max(hi,v);}}
+    if(lo===Infinity){lo=-180;hi=180;}
+    jRanges.push({min:lo,max:hi,mid:(lo+hi)/2});
+    gMaxSpan=Math.max(gMaxSpan,hi-lo);
+  }
+  gMaxSpan=Math.max(gMaxSpan,1);  // minimum 1 degree span
+  const gHalf=gMaxSpan/2*1.1;  // 10% padding
+
+  for(let ji=0;ji<7;ji++){
+    const canvas=plotCanvases[ji];
+    if(!canvas)continue;
+    const ctx=canvas.getContext("2d");
+    const W=canvas.width,H=canvas.height;
+    ctx.clearRect(0,0,W,H);
+    const isGrip=ji===6;
+    const mL=45,mR=10,mT=4,mB=16;
+    const pw=W-mL-mR,ph=H-mT-mB;
+    const nF=Math.max(chunkSize,2);
+    function tx(f){return mL+(f/(nF-1))*pw;}
+    // Predicted data
+    let pA=[];
+    if(pred){
+      if(isGrip&&pred.gripper)pA=pred.gripper.map(g=>g[0]);
+      else if(!isGrip)pA=pred.joints.map(j=>j[ji]*180/Math.PI);
+    }
+    // Actual data
+    let aA=[];
+    if(!isGrip)for(const a of actualHistory)aA.push({f:a.step,v:a.joints[ji]*180/Math.PI});
+    // Y range: same span for joints (centered on each), independent for gripper
+    let yMin,yMax;
+    if(isGrip){
+      yMin=-50;yMax=1050;
+    }else{
+      const mid=jRanges[ji].mid;
+      yMin=mid-gHalf;yMax=mid+gHalf;
+    }
+    function ty(v){return mT+(1-(v-yMin)/(yMax-yMin))*ph;}
+    // Grid
+    ctx.strokeStyle="#1a2a50";ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(mL,mT+ph/2);ctx.lineTo(W-mR,mT+ph/2);ctx.stroke();
+    // Label
+    ctx.fillStyle=PLOT_COLORS[ji];ctx.font="bold 11px monospace";ctx.textAlign="left";
+    ctx.fillText(PLOT_LABELS[ji],mL+4,mT+13);
+    // Y range
+    const u=isGrip?"":"\u00b0";
+    ctx.fillStyle="#666";ctx.font="10px monospace";ctx.textAlign="right";
+    ctx.fillText(yMax.toFixed(isGrip?2:0)+u,mL-3,mT+11);
+    ctx.fillText(yMin.toFixed(isGrip?2:0)+u,mL-3,mT+ph);
+    // Frame labels
+    ctx.fillStyle="#555";ctx.textAlign="center";ctx.font="9px monospace";
+    const fs=Math.max(1,Math.floor(nF/5));
+    for(let f=0;f<nF;f+=fs)ctx.fillText(f.toString(),tx(f),H-2);
+    ctx.fillText((nF-1).toString(),tx(nF-1),H-2);
+    ctx.fillStyle="#444";ctx.font="8px monospace";ctx.textAlign="right";
+    ctx.fillText("("+(nF/fps).toFixed(1)+"s)",W-mR,H-2);
+    // Step indicator
+    if(latestStep>0&&latestStep<=nF){
+      ctx.strokeStyle="rgba(255,255,255,0.15)";ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(tx(latestStep-1),mT);ctx.lineTo(tx(latestStep-1),mT+ph);ctx.stroke();
+    }
+    // Predicted line (blue)
+    if(pA.length>0){
+      ctx.strokeStyle="#2196f3";ctx.lineWidth=2;ctx.beginPath();
+      let s=false;
+      for(let f=0;f<pA.length;f++){const v=pA[f];if(isNaN(v)){s=false;continue;}if(!s){ctx.moveTo(tx(f),ty(v));s=true;}else ctx.lineTo(tx(f),ty(v));}
+      ctx.stroke();
+      ctx.fillStyle="#2196f3";
+      for(let f=0;f<pA.length;f++){const v=pA[f];if(isNaN(v))continue;ctx.beginPath();ctx.arc(tx(f),ty(v),2,0,Math.PI*2);ctx.fill();}
+    }
+    // Actual line + dots (green)
+    if(aA.length>0){
+      ctx.strokeStyle="#4caf50";ctx.lineWidth=1.5;ctx.beginPath();
+      let s=false;
+      for(const a of aA){if(isNaN(a.v)){s=false;continue;}if(!s){ctx.moveTo(tx(a.f),ty(a.v));s=true;}else ctx.lineTo(tx(a.f),ty(a.v));}
+      ctx.stroke();
+      ctx.fillStyle="#4caf50";
+      for(const a of aA){if(isNaN(a.v))continue;ctx.beginPath();ctx.arc(tx(a.f),ty(a.v),3,0,Math.PI*2);ctx.fill();}
+    }
+  }
+  requestAnimationFrame(drawPlot);
+}
+
+initPlotCanvases();
+startStream();
+drawPlot();
+</script>
+</body>
+</html>
