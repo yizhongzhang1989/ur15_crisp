@@ -194,7 +194,7 @@
     <h2>Controller Parameters</h2>
     <div class="step-row" style="margin-bottom:10px;"><label>Controller:</label>
       <select id="paramCtrlSelect" onchange="loadParams()" style="padding:4px 8px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;min-width:250px;">
-        <option value="">-- select --</option><option value="gravity_compensation">gravity_compensation</option><option value="cartesian_impedance_controller">cartesian_impedance_controller</option><option value="joint_impedance_controller">joint_impedance_controller</option>
+        <option value="">-- select --</option><option value="gravity_compensation">gravity_compensation</option><option value="cartesian_impedance_controller">cartesian_impedance_controller</option><option value="joint_impedance_controller">joint_impedance_controller</option><option value="forward_position_controller">forward_position_controller</option>
       </select><button class="btn-send" onclick="loadParams()" style="margin-left:4px;">Refresh</button>
     </div><div id="paramsContainer" style="max-height:400px;overflow-y:auto;"></div>
     <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
@@ -368,7 +368,7 @@ function updateAliciaDisplay(aliciaJoints, teleop) {
 }
 const KEY_PARAMS={'Task Stiffness':['task.k_pos_x','task.k_pos_y','task.k_pos_z','task.k_rot_x','task.k_rot_y','task.k_rot_z'],'Task Damping':['task.d_pos_x','task.d_pos_y','task.d_pos_z','task.d_rot_x','task.d_rot_y','task.d_rot_z'],'Nullspace':['nullspace.stiffness','nullspace.damping','nullspace.max_tau'],'Filters':['filter.q','filter.dq','filter.output_torque','filter.target_pose'],'Safety':['max_delta_tau','limit_torques','limit_error','stop_commands']};
 let currentParams={};
-function loadParams(){const c=document.getElementById("paramCtrlSelect").value,ct=document.getElementById("paramsContainer"),l=document.getElementById("paramLog");if(!c){ct.innerHTML="";return;}ct.innerHTML='<div style="color:var(--dim)">Loading...</div>';fetch(`/api/params/${c}`).then(r=>r.json()).then(d=>{if(d.error){ct.innerHTML=`<div class="err">${d.error}</div>`;return;}currentParams=d.params;renderParams(c,d.params);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});}
+function loadParams(){const c=document.getElementById("paramCtrlSelect").value,ct=document.getElementById("paramsContainer"),l=document.getElementById("paramLog");if(!c){ct.innerHTML="";return;}ct.innerHTML='<div style="color:var(--dim)">Loading...</div>';if(c==="forward_position_controller"){fetch("/api/pos_control_params").then(r=>r.json()).then(d=>{renderPosParams(d);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});return;}fetch(`/api/params/${c}`).then(r=>r.json()).then(d=>{if(d.error){ct.innerHTML=`<div class="err">${d.error}</div>`;return;}currentParams=d.params;renderParams(c,d.params);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});}
 function renderParams(c,p){const ct=document.getElementById("paramsContainer");let h='';const rd=new Set();for(const[g,ks]of Object.entries(KEY_PARAMS)){const m=ks.filter(k=>k in p);if(!m.length)continue;h+=`<div class="param-group"><div class="param-group-title">${g}</div>`;for(const k of m){h+=paramRowHtml(c,k,p[k]);rd.add(k);}h+='</div>';}const rm=Object.keys(p).filter(k=>!rd.has(k)).sort();if(rm.length){h+='<div class="param-group"><div class="param-group-title">Other Parameters</div>';for(const k of rm)h+=paramRowHtml(c,k,p[k]);h+='</div>';}ct.innerHTML=h;}
 function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_;return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${ib?'bool':in_?'num':t}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}',${ib})">Set</button>`:''}</div>`;}
 function setParam(c,n,id,ib){const el=document.getElementById(id);let v=ib?el.value==='true':parseFloat(el.value);if(!ib&&isNaN(v)){document.getElementById("paramLog").innerHTML='<div class="err">Invalid number</div>';return;}const l=document.getElementById("paramLog");l.innerHTML=`<div>Setting ${n} = ${v}...</div>`;fetch(`/api/params/${c}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({params:{[n]:v}})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Set ${n} = ${v}</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
@@ -528,7 +528,12 @@ function drawPlot() {
 
 // --- Config Save/Reset ---
 function saveConfig() {
+  const c = document.getElementById("paramCtrlSelect").value;
   const l = document.getElementById("paramLog");
+  if (c === "forward_position_controller") {
+    savePosParamsToDisk();
+    return;
+  }
   l.innerHTML = '<div>Saving config...</div>';
   fetch("/api/save_config", { method: "POST" }).then(r => r.json()).then(d => {
     if (d.success) l.innerHTML = `<div class="ok">Saved to ${d.path} (${d.changed} values updated). Takes effect on next launch.</div>`;
@@ -551,6 +556,47 @@ function checkConfigStatus() {
     s.textContent = d.user_config_exists ? "Custom config active" : "Using template defaults";
     s.style.color = d.user_config_exists ? "var(--green)" : "var(--dim)";
   }).catch(() => {});
+}
+
+// --- Position Control Parameters ---
+let posParamsData = {};
+
+function renderPosParams(d) {
+  const ct = document.getElementById("paramsContainer");
+  posParamsData = d;
+  let h = '';
+  for (const [group, params] of Object.entries(d)) {
+    if (typeof params !== 'object' || params === null) continue;
+    const label = group.replace(/_/g, ' ');
+    h += `<div class="param-group"><div class="param-group-title">${label}</div>`;
+    for (const [jn, val] of Object.entries(params)) {
+      const shortName = jn.replace('_joint','');
+      const id = `pp_${group}_${jn.replace(/\./g,'_')}`;
+      h += `<div class="param-row"><span class="pname">${shortName}</span><input type="number" id="${id}" value="${val}" step="any"><span class="ptype">num</span><button class="pbtn" onclick="setPosParam('${group}','${jn}','${id}')">Set</button></div>`;
+    }
+    h += '</div>';
+  }
+  ct.innerHTML = h || '<div style="color:var(--dim)">No parameters</div>';
+}
+
+function setPosParam(group, jn, id) {
+  const val = parseFloat(document.getElementById(id).value);
+  if (isNaN(val) || val <= 0) { document.getElementById("paramLog").innerHTML = '<div class="err">Invalid value (must be > 0)</div>'; return; }
+  const l = document.getElementById("paramLog");
+  l.innerHTML = `<div>Setting ${group}.${jn} = ${val}...</div>`;
+  fetch("/api/pos_control_params", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({[group]: {[jn]: val}})})
+    .then(r=>r.json()).then(d=>{
+      l.innerHTML = d.success ? `<div class="ok">Set ${jn} = ${val}</div>` : `<div class="err">${d.error}</div>`;
+    }).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});
+}
+
+function savePosParamsToDisk() {
+  const l = document.getElementById("paramLog");
+  l.innerHTML = '<div>Saving position control params...</div>';
+  fetch("/api/pos_control_params/save", {method:"POST"}).then(r=>r.json()).then(d=>{
+    if (d.success) l.innerHTML = `<div class="ok">Saved to ${d.path}</div>`;
+    else l.innerHTML = `<div class="err">${d.error}</div>`;
+  }).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});
 }
 
 // --- Tab Switching ---

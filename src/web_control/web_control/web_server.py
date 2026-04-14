@@ -658,6 +658,52 @@ class WebControlServer:
             exists = config_path is not None and os.path.isfile(config_path)
             return jsonify({"user_config_exists": exists, "path": config_path or ""})
 
+        @app.route("/api/pos_control_params")
+        def get_pos_control_params():
+            """Get current position control parameters."""
+            jn = self.robot.config.joint_names
+            return jsonify({
+                "fwd_pos_max_vel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_vel)},
+                "fwd_pos_max_accel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_accel)},
+                "fwd_pos_max_decel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_decel)},
+            })
+
+        @app.route("/api/pos_control_params", methods=["POST"])
+        def set_pos_control_params():
+            """Update position control parameters at runtime. Body: {"fwd_pos_max_vel": {...}, ...}"""
+            data = request.get_json()
+            jn = self.robot.config.joint_names
+            if "fwd_pos_max_vel" in data:
+                for n, v in data["fwd_pos_max_vel"].items():
+                    if n in jn:
+                        self._fwd_pos_max_vel[jn.index(n)] = float(v)
+            if "fwd_pos_max_accel" in data:
+                for n, v in data["fwd_pos_max_accel"].items():
+                    if n in jn:
+                        self._fwd_pos_max_accel[jn.index(n)] = float(v)
+            if "fwd_pos_max_decel" in data:
+                for n, v in data["fwd_pos_max_decel"].items():
+                    if n in jn:
+                        self._fwd_pos_max_decel[jn.index(n)] = float(v)
+            return jsonify({"success": True})
+
+        @app.route("/api/pos_control_params/save", methods=["POST"])
+        def save_pos_control_params():
+            """Save current position control parameters to config/position_control.yaml."""
+            try:
+                config_path = get_config_path("position_control.yaml")
+            except RuntimeError:
+                return jsonify({"error": "Cannot find workspace config/ directory"}), 500
+            jn = self.robot.config.joint_names
+            cfg = {
+                "fwd_pos_max_vel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_vel)},
+                "fwd_pos_max_accel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_accel)},
+                "fwd_pos_max_decel": {n: round(float(v), 4) for n, v in zip(jn, self._fwd_pos_max_decel)},
+            }
+            with open(config_path, "w") as f:
+                yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+            return jsonify({"success": True, "path": config_path})
+
         @app.route("/api/move_to", methods=["POST"])
         def move_to():
             """Linearly interpolate to a target pose using crisp_py's move_to."""
