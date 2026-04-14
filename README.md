@@ -403,6 +403,9 @@ ros2 launch data_collection data_collection.launch.py
 
 # Terminal 8 (optional): VLA joint control dashboard (port 8091)
 ros2 launch joint_vla_control joint_vla_control.launch.py
+
+# Terminal 9 (optional): VLA with history action joint control dashboard (port 8092)
+ros2 launch joint_history_vla_control joint_history_vla_control.launch.py
 ```
 
 ### Controlling the Robot
