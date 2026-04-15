@@ -42,10 +42,11 @@ ros2 launch ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true
 ros2 launch ur15_bringup ur15_crisp.launch.py robot_ip:=192.168.1.15
 
 # 8. Or launch with simulation (see "Launching in Simulation" below)
-# Requires ur_simulator cloned separately — see README section
-cd ~/Documents/ur_simulator
+# Requires tmp/ur_simulator built — see README section
+cd ~/Documents/ur15_crisp/tmp/ur_simulator
 ./launch_all.sh \
-    --controllers_file ~/Documents/ur15_crisp/install/ur15_bringup/share/ur15_bringup/config/ur15_sim_controllers.yaml
+    --control_mode effort \
+    --controllers_file ~/Documents/ur15_crisp/config/ur15_sim_controllers.yaml
 # Then in another terminal:
 cd ~/Documents/ur15_crisp
 ros2 launch ur15_bringup ur15_crisp_sim.launch.py
@@ -86,25 +87,27 @@ The [ur_simulator](https://github.com/yizhongzhang1989/ur_simulator) provides Mu
 
 ### Step 0: Set up ur_simulator (one-time)
 
+The simulator is included at `tmp/ur_simulator/`. Build it once:
+
 ```bash
-# Clone in a sibling directory (not inside ur15_crisp)
-cd ~/Documents
-git clone --recurse-submodules https://github.com/yizhongzhang1989/ur_simulator.git
-cd ur_simulator
-sudo apt install -y ros-humble-ros-gz ros-humble-gz-ros2-control ros-humble-rosbridge-suite ros-humble-pinocchio
+cd ~/Documents/ur15_crisp/tmp/ur_simulator
+sudo apt install -y ros-humble-ros-gz ros-humble-gz-ros2-control ros-humble-rosbridge-suite ros-humble-pinocchio ros-humble-mujoco-ros2-control
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 ```
 
+Verify `config/config.yaml` has `ur_type: ur15`.
+
 ### Step 1: Start the simulator
 
 ```bash
-cd ~/Documents/ur_simulator
+cd ~/Documents/ur15_crisp/tmp/ur_simulator
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ./launch_all.sh \
-    --controllers_file ~/Documents/ur15_crisp/install/ur15_bringup/share/ur15_bringup/config/ur15_sim_controllers.yaml
+    --control_mode effort \
+    --controllers_file ~/Documents/ur15_crisp/config/ur15_sim_controllers.yaml
 ```
 
 This starts:
@@ -117,7 +120,7 @@ MuJoCo always exposes effort interfaces — no `--control_mode` flag needed. The
 
 To use Gazebo instead: `./launch_all.sh --simulator gazebo --control_mode effort --controllers_file ...`
 
-Edit `config/config.yaml` to change `ur_type` (default: ur5e), ports, etc.
+Edit `config/config.yaml` to change `ur_type` (default: ur15), ports, etc.
 
 ### Step 2: Load CRISP controllers
 
