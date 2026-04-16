@@ -13,6 +13,7 @@ Usage:
 """
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 from typing import List, Tuple
 
 
@@ -28,20 +29,10 @@ def _rot_z(angle: float) -> np.ndarray:
 
 
 def _transform(rpy: Tuple[float, float, float], xyz: Tuple[float, float, float]) -> np.ndarray:
-    """Build 4x4 homogeneous transform from RPY (roll, pitch, yaw) and XYZ translation."""
-    roll, pitch, yaw = rpy
-    cr, sr = np.cos(roll), np.sin(roll)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cy, sy = np.cos(yaw), np.sin(yaw)
-
-    R = np.array([
-        [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
-        [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
-        [  -sp,           cp*sr,           cp*cr  ],
-    ])
-
+    """Build 4x4 homogeneous transform from RPY (roll, pitch, yaw) and XYZ translation.
+    Uses extrinsic XYZ convention (same as URDF fixed-axis RPY)."""
     T = np.eye(4)
-    T[:3, :3] = R
+    T[:3, :3] = Rotation.from_euler('xyz', rpy).as_matrix()
     T[0, 3], T[1, 3], T[2, 3] = xyz
     return T
 
@@ -101,45 +92,18 @@ def forward_kinematics(joint_angles: List[float]) -> np.ndarray:
 
 def rotation_to_axis_angle(R: np.ndarray) -> np.ndarray:
     """Convert 3x3 rotation matrix to axis-angle representation (rx, ry, rz)."""
-    theta = np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))
-    if abs(theta) < 1e-10:
-        return np.zeros(3)
-    axis = np.array([
-        R[2, 1] - R[1, 2],
-        R[0, 2] - R[2, 0],
-        R[1, 0] - R[0, 1],
-    ]) / (2 * np.sin(theta))
-    return axis * theta
+    return Rotation.from_matrix(R).as_rotvec()
 
 
 def rotation_to_quaternion(R: np.ndarray) -> np.ndarray:
     """Convert 3x3 rotation matrix to quaternion [x, y, z, w]."""
-    tr = np.trace(R)
-    if tr > 0:
-        s = 2.0 * np.sqrt(tr + 1.0)
-        w = 0.25 * s
-        x = (R[2, 1] - R[1, 2]) / s
-        y = (R[0, 2] - R[2, 0]) / s
-        z = (R[1, 0] - R[0, 1]) / s
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-        w = (R[2, 1] - R[1, 2]) / s
-        x = 0.25 * s
-        y = (R[0, 1] + R[1, 0]) / s
-        z = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-        w = (R[0, 2] - R[2, 0]) / s
-        x = (R[0, 1] + R[1, 0]) / s
-        y = 0.25 * s
-        z = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-        w = (R[1, 0] - R[0, 1]) / s
-        x = (R[0, 2] + R[2, 0]) / s
-        y = (R[1, 2] + R[2, 1]) / s
-        z = 0.25 * s
-    return np.array([x, y, z, w])
+    return Rotation.from_matrix(R).as_quat()
+
+
+def quaternion_to_rpy(quat: np.ndarray) -> np.ndarray:
+    """Convert quaternion [x, y, z, w] to RPY (roll, pitch, yaw) in radians.
+    Uses extrinsic XYZ convention (same as URDF)."""
+    return Rotation.from_quat(quat).as_euler('xyz')
 
 
 def fk_6dof(joint_angles: List[float]) -> np.ndarray:

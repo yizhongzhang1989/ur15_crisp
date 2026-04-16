@@ -18,13 +18,14 @@ import yaml
 from flask import Flask, Response, jsonify, request, send_from_directory
 from sensor_msgs.msg import JointState
 from std_msgs.msg import UInt8, Float64MultiArray
-from geometry_msgs.msg import WrenchStamped
+from geometry_msgs.msg import WrenchStamped, PoseStamped
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from crisp_py.robot import make_robot
 from crisp_py.control.parameters_client import ParametersClient
 from common.workspace import get_config_path
+from ur15_dashboard.kinematics import fk_quaternion, quaternion_to_rpy
 
 try:
     from alicia_duo_leader_driver.msg import ArmJointState
@@ -151,10 +152,14 @@ class WebControlServer:
         self._cmd_target_pub = self.robot.node.create_publisher(
             JointState, "/cmd_target_joint", 10
         )
+        self._cmd_target_pose_pub = self.robot.node.create_publisher(
+            PoseStamped, "/cmd_target_pose", 10
+        )
         self._fwd_pos_pub = self.robot.node.create_publisher(
             Float64MultiArray, "/forward_position_controller/commands", 10
         )
         self._cmd_target_raw = None     # latest raw target (set by API/teleop)
+        self._cmd_target_pose = None    # cached FK pose: {"x","y","z","qx","qy","qz","qw"}
         # Load position control config for forward_position_controller trapezoidal profile
         pos_cfg = _load_position_control_config()
         joint_names = [
@@ -312,6 +317,36 @@ class WebControlServer:
         raw_msg.name = self.robot.config.joint_names
         raw_msg.position = [float(j) for j in raw]
         self._cmd_target_pub.publish(raw_msg)
+        # Compute and publish /cmd_target_pose via FK
+        try:
+            pos, quat = fk_quaternion(list(raw))
+            pose_msg = PoseStamped()
+            pose_msg.header.stamp = stamp
+            pose_msg.header.frame_id = "base_link"
+            pose_msg.pose.position.x = float(pos[0])
+            pose_msg.pose.position.y = float(pos[1])
+            pose_msg.pose.position.z = float(pos[2])
+            pose_msg.pose.orientation.x = float(quat[0])
+            pose_msg.pose.orientation.y = float(quat[1])
+            pose_msg.pose.orientation.z = float(quat[2])
+            pose_msg.pose.orientation.w = float(quat[3])
+            self._cmd_target_pose_pub.publish(pose_msg)
+            rpy = quaternion_to_rpy(quat)
+            self._cmd_target_pose = {
+                "x": round(float(pos[0]), 5), "y": round(float(pos[1]), 5), "z": round(float(pos[2]), 5),
+                "qx": round(float(quat[0]), 5), "qy": round(float(quat[1]), 5),
+                "qz": round(float(quat[2]), 5), "qw": round(float(quat[3]), 5),
+                "roll": round(float(np.degrees(rpy[0])), 2),
+                "pitch": round(float(np.degrees(rpy[1])), 2),
+                "yaw": round(float(np.degrees(rpy[2])), 2),
+            }
+            # Feed FK pose to cartesian impedance controller
+            from crisp_py.utils.geometry import Pose
+            from scipy.spatial.transform import Rotation
+            target_pose = Pose(position=pos, orientation=Rotation.from_quat(quat))
+            self.robot.set_target(pose=target_pose)
+        except Exception:
+            pass
         # Feed to joint impedance controller
         self.robot.set_target_joint(np.array(raw))
         # Feed to forward position controller with trapezoidal velocity profile
@@ -493,6 +528,25 @@ class WebControlServer:
                 pos = np.array([data["x"], data["y"], data["z"]])
                 quat = [data["qx"], data["qy"], data["qz"], data["qw"]]
                 ori = Rotation.from_quat(quat)
+                target = Pose(position=pos, orientation=ori)
+                self.robot.set_target(pose=target)
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/set_target_pose_rpy", methods=["POST"])
+        def set_target_pose_rpy():
+            """Set target pose from position + RPY (degrees). Body: {"x","y","z","roll","pitch","yaw"}"""
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json()
+            try:
+                from crisp_py.utils.geometry import Pose
+                from scipy.spatial.transform import Rotation
+
+                pos = np.array([float(data["x"]), float(data["y"]), float(data["z"])])
+                rpy_deg = [float(data["roll"]), float(data["pitch"]), float(data["yaw"])]
+                ori = Rotation.from_euler('xyz', np.radians(rpy_deg))
                 target = Pose(position=pos, orientation=ori)
                 self.robot.set_target(pose=target)
                 return jsonify({"success": True})
@@ -753,6 +807,9 @@ class WebControlServer:
                                 "qy": round(float(pose.orientation.as_quat()[1]), 5),
                                 "qz": round(float(pose.orientation.as_quat()[2]), 5),
                                 "qw": round(float(pose.orientation.as_quat()[3]), 5),
+                                "roll": round(float(np.degrees(pose.orientation.as_euler('xyz')[0])), 2),
+                                "pitch": round(float(np.degrees(pose.orientation.as_euler('xyz')[1])), 2),
+                                "yaw": round(float(np.degrees(pose.orientation.as_euler('xyz')[2])), 2),
                             },
                             "joints": [round(float(v), 4) for v in joints],
                             "velocity": [round(float(v), 4) for v in vel] if vel is not None else [],
@@ -764,6 +821,7 @@ class WebControlServer:
                             },
                             "cmd_torques": [round(float(v), 3) for v in self._commanded_torques] if self._commanded_torques is not None else [],
                             "cmd_target_raw": [round(float(v), 4) for v in self._cmd_target_raw] if self._cmd_target_raw is not None else [],
+                            "cmd_target_pose": self._cmd_target_pose,
                             "alicia_joints": [round(float(v), 4) for v in self._alicia_joints] if self._alicia_joints is not None else [],
                             "alicia_teleop": self._alicia_teleop,
                             "gripper_raw": round(float(self._gripper_raw), 1) if self._gripper_raw is not None else None,
