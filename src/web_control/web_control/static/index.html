@@ -156,19 +156,15 @@
     </div>
     <div class="card" style="border-radius:0 6px 6px 6px;">
       <div id="tab-cartesian" class="tab-content active">
-        <div class="move-section">
-          <div class="step-row"><label>Step (m):</label><input type="number" id="stepSize" value="0.02" step="0.005" min="0.001" max="0.2"></div>
-          <div class="delta-grid">
-            <button class="btn-x" onclick="moveDelta(1,0,0)">+X</button><button class="btn-y" onclick="moveDelta(0,1,0)">+Y</button><button class="btn-z" onclick="moveDelta(0,0,1)">+Z</button>
-            <button class="btn-x" onclick="moveDelta(-1,0,0)">&minus;X</button><button class="btn-y" onclick="moveDelta(0,-1,0)">&minus;Y</button><button class="btn-z" onclick="moveDelta(0,0,-1)">&minus;Z</button>
-          </div>
-          <hr style="border-color:var(--accent);margin:4px 0;"><h2>Send Target Pose</h2>
-          <div class="target-form">
-            <label>X:</label><input type="number" id="tx" step="0.01"><label>Y:</label><input type="number" id="ty" step="0.01"><label>Z:</label><input type="number" id="tz" step="0.01">
-            <label>qx:</label><input type="number" id="tqx" step="0.01"><label>qy:</label><input type="number" id="tqy" step="0.01"><label>qz:</label><input type="number" id="tqz" step="0.01"><label>qw:</label><input type="number" id="tqw" step="0.01">
-            <div class="btn-row" style="grid-column:1/-1;"><button class="btn-copy" onclick="copyCurrentPose()">Copy Current</button><button class="btn-send" onclick="sendTarget()">Send Target</button></div>
-          </div><div class="log" id="moveLog"></div>
+        <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center;">
+          <button id="btnCartCtrl" class="btn-send" onclick="toggleCartesianController()" style="padding:8px 20px;">Enable Cartesian Impedance Controller</button>
         </div>
+        <div id="cartSliderContainer"></div>
+        <div class="btn-row" style="margin-top:8px;">
+          <button class="btn-copy" onclick="snapCartesianToCurrent()">Snap Target to Current</button>
+          <button id="btnCartSend" class="btn-send" onclick="toggleCartesianSending()" style="padding:8px 20px;">Start Sending</button>
+        </div>
+        <div class="log" id="cartLog"></div>
       </div>
       <div id="tab-joint" class="tab-content">
         <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center;">
@@ -205,8 +201,8 @@
 const JN=["shoulder_pan","shoulder_lift","elbow","wrist_1","wrist_2","wrist_3"];
 let latestPose=null, latestJoints=null;
 let availableControllers=[];  // all known controller names (active + inactive)
-function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.cmd_target_raw||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}if(d.alicia_teleop){document.getElementById("teleopStatus").textContent="ACTIVE";document.getElementById("teleopStatus").style.color="var(--green)";}else{document.getElementById("teleopStatus").textContent="Inactive";document.getElementById("teleopStatus").style.color="var(--dim)";}if(d.gripper_raw!==null&&d.gripper_raw!==undefined){document.getElementById("teleopGripperRaw").textContent=d.gripper_raw.toFixed(0);}if(d.gripper_level!==null&&d.gripper_level!==undefined){document.getElementById("teleopGripperLevel").textContent=d.gripper_level;document.getElementById("teleopGripperPos").textContent=Math.round(d.gripper_level*255/24);}if(d.alicia_joints&&d.alicia_joints.length){document.getElementById("teleopJoints").textContent=d.alicia_joints.map(v=>(v*180/Math.PI).toFixed(1)+'\u00b0').join(', ');}if(d.cmd_target_pose){const tp=d.cmd_target_pose;document.getElementById("teleopTcpPos").textContent=`(${tp.x}, ${tp.y}, ${tp.z}) m`;document.getElementById("teleopTcpQuat").textContent=`(${tp.qx}, ${tp.qy}, ${tp.qz}, ${tp.qw})`;document.getElementById("teleopTcpRpy").textContent=`(${tp.roll}, ${tp.pitch}, ${tp.yaw}) deg`;}pushPlotData(d);updateJointSlidersCurrent();};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
-function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;availableControllers=d.controllers.map(c=>c.name);const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");const jic=d.controllers.find(c=>c.name==="joint_impedance_controller");jointControllerActive=jic&&jic.state==="active";const jtc=d.controllers.find(c=>c.name==="forward_position_controller");jointTrajControllerActive=jtc&&jtc.state==="active";if(jointControllerActive)jointControlMode='impedance';else if(jointTrajControllerActive)jointControlMode='trajectory';else jointControlMode=null;updateJointCtrlBtns();}).catch(()=>{});}
+function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.cmd_target_raw||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}if(d.alicia_teleop){document.getElementById("teleopStatus").textContent="ACTIVE";document.getElementById("teleopStatus").style.color="var(--green)";}else{document.getElementById("teleopStatus").textContent="Inactive";document.getElementById("teleopStatus").style.color="var(--dim)";}if(d.gripper_raw!==null&&d.gripper_raw!==undefined){document.getElementById("teleopGripperRaw").textContent=d.gripper_raw.toFixed(0);}if(d.gripper_level!==null&&d.gripper_level!==undefined){document.getElementById("teleopGripperLevel").textContent=d.gripper_level;document.getElementById("teleopGripperPos").textContent=Math.round(d.gripper_level*255/24);}if(d.alicia_joints&&d.alicia_joints.length){document.getElementById("teleopJoints").textContent=d.alicia_joints.map(v=>(v*180/Math.PI).toFixed(1)+'\u00b0').join(', ');}if(d.cmd_target_pose){const tp=d.cmd_target_pose;document.getElementById("teleopTcpPos").textContent=`(${tp.x}, ${tp.y}, ${tp.z}) m`;document.getElementById("teleopTcpQuat").textContent=`(${tp.qx}, ${tp.qy}, ${tp.qz}, ${tp.qw})`;document.getElementById("teleopTcpRpy").textContent=`(${tp.roll}, ${tp.pitch}, ${tp.yaw}) deg`;}pushPlotData(d);updateJointSlidersCurrent();updateCartSlidersCurrent();};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
+function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;availableControllers=d.controllers.map(c=>c.name);const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");const jic=d.controllers.find(c=>c.name==="joint_impedance_controller");jointControllerActive=jic&&jic.state==="active";const jtc=d.controllers.find(c=>c.name==="forward_position_controller");jointTrajControllerActive=jtc&&jtc.state==="active";if(jointControllerActive)jointControlMode='impedance';else if(jointTrajControllerActive)jointControlMode='trajectory';else jointControlMode=null;const cic=d.controllers.find(c=>c.name==="cartesian_impedance_controller");cartControllerActive=cic&&cic.state==="active";updateJointCtrlBtns();updateCartCtrlBtn();}).catch(()=>{});}
 function switchCtrl(n){const l=document.getElementById("ctrlLog");l.innerHTML=`<div>Switching to ${n}...</div>`;fetch("/api/switch_controller",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({controller:n})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Switched to ${n}</div>`:`<div class="err">${d.error}</div>`;refreshControllers();}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 function moveDelta(sx,sy,sz){const s=parseFloat(document.getElementById("stepSize").value)||0.02,l=document.getElementById("moveLog");fetch("/api/move_delta",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dx:sx*s,dy:sy*s,dz:sz*s})}).then(r=>r.json()).then(d=>{if(d.success){const p=d.new_position;l.innerHTML=`<div class="ok">Target: (${p.x}, ${p.y}, ${p.z})</div>`;}else l.innerHTML=`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 function copyCurrentPose(){if(!latestPose)return;document.getElementById("tx").value=latestPose.x;document.getElementById("ty").value=latestPose.y;document.getElementById("tz").value=latestPose.z;document.getElementById("tqx").value=latestPose.qx;document.getElementById("tqy").value=latestPose.qy;document.getElementById("tqz").value=latestPose.qz;document.getElementById("tqw").value=latestPose.qw;}
@@ -351,6 +347,145 @@ function toggleAliciaTeleop() {
     }
   }).catch(e => { aliciaTeleopActive = !aliciaTeleopActive; document.getElementById("jointLog").innerHTML = `<div class="err">${e}</div>`; });
 }
+
+// --- Cartesian Impedance Controller ---
+let cartControllerActive = false;
+let cartSendingActive = false;
+const CART_NAMES = ["X (m)", "Y (m)", "Z (m)", "Roll (°)", "Pitch (°)", "Yaw (°)"];
+const CART_KEYS = ["x", "y", "z", "roll", "pitch", "yaw"];
+const CART_LIMITS = [[-1.5, 1.5], [-1.5, 1.5], [-0.5, 2.0], [-180, 180], [-180, 180], [-180, 180]];
+const CART_STEPS = [0.001, 0.001, 0.001, 0.1, 0.1, 0.1];
+let cartSliderTargets = [0, 0, 0, 0, 0, 0];
+let cartSlidersInitialized = false;
+
+function initCartControls() {
+  const container = document.getElementById("cartSliderContainer");
+  container.innerHTML = CART_NAMES.map((n, i) => `
+    <div class="joint-slider-row">
+      <div class="joint-slider-name">${n}</div>
+      <div class="joint-slider-vals">
+        <div class="joint-slider-line">
+          <label style="color:var(--green)">Cur:</label>
+          <input type="range" id="ccur${i}" min="${CART_LIMITS[i][0]}" max="${CART_LIMITS[i][1]}" step="${CART_STEPS[i]}" value="0" disabled style="pointer-events:none;opacity:0.6;">
+          <span class="val" id="ccurVal${i}" style="color:var(--green)">0</span>
+        </div>
+        <div class="joint-slider-line">
+          <label style="color:var(--blue)">Tgt:</label>
+          <input type="range" class="target-slider" id="ctgt${i}" min="${CART_LIMITS[i][0]}" max="${CART_LIMITS[i][1]}" step="${CART_STEPS[i]}" value="0" oninput="onCartSliderChange(${i})">
+          <input type="number" class="val-input" id="ctgtVal${i}" value="0" step="${CART_STEPS[i]}" onchange="onCartInputChange(${i})">
+        </div>
+      </div>
+      <div class="joint-slider-diff" id="cdiff${i}">&Delta; 0</div>
+    </div>
+  `).join("");
+}
+
+function updateCartSlidersCurrent() {
+  if (!latestPose || latestPose.roll === undefined) return;
+  const cur = [latestPose.x, latestPose.y, latestPose.z, latestPose.roll, latestPose.pitch, latestPose.yaw];
+  if (!cartSlidersInitialized) {
+    cartSlidersInitialized = true;
+    for (let i = 0; i < 6; i++) {
+      cartSliderTargets[i] = cur[i];
+      const tgtEl = document.getElementById("ctgt" + i);
+      if (tgtEl) { tgtEl.value = cur[i]; document.getElementById("ctgtVal" + i).value = (i < 3 ? cur[i].toFixed(3) : cur[i].toFixed(1)); }
+    }
+  }
+  for (let i = 0; i < 6; i++) {
+    const el = document.getElementById("ccur" + i);
+    if (el) { el.value = cur[i]; document.getElementById("ccurVal" + i).textContent = (i < 3 ? cur[i].toFixed(4) : cur[i].toFixed(1) + "°"); }
+    const diff = cartSliderTargets[i] - cur[i];
+    const diffEl = document.getElementById("cdiff" + i);
+    if (diffEl) { diffEl.textContent = "\u0394 " + (i < 3 ? diff.toFixed(3) : diff.toFixed(1)); diffEl.style.color = Math.abs(diff) > (i < 3 ? 0.005 : 1) ? "var(--orange)" : "var(--dim)"; }
+  }
+}
+
+function onCartSliderChange(i) {
+  const val = parseFloat(document.getElementById("ctgt" + i).value);
+  cartSliderTargets[i] = val;
+  document.getElementById("ctgtVal" + i).value = (i < 3 ? val.toFixed(3) : val.toFixed(1));
+  sendCartSliders();
+}
+
+function onCartInputChange(i) {
+  const val = parseFloat(document.getElementById("ctgtVal" + i).value);
+  if (isNaN(val)) return;
+  cartSliderTargets[i] = val;
+  document.getElementById("ctgt" + i).value = val;
+  sendCartSliders();
+}
+
+function snapCartesianToCurrent() {
+  if (!latestPose || latestPose.roll === undefined) return;
+  const cur = [latestPose.x, latestPose.y, latestPose.z, latestPose.roll, latestPose.pitch, latestPose.yaw];
+  for (let i = 0; i < 6; i++) {
+    cartSliderTargets[i] = cur[i];
+    document.getElementById("ctgt" + i).value = cur[i];
+    document.getElementById("ctgtVal" + i).value = (i < 3 ? cur[i].toFixed(3) : cur[i].toFixed(1));
+  }
+  sendCartSliders();
+}
+
+function sendCartSliders() {
+  if (!cartSendingActive) return;
+  const body = {x: cartSliderTargets[0], y: cartSliderTargets[1], z: cartSliderTargets[2],
+                roll: cartSliderTargets[3], pitch: cartSliderTargets[4], yaw: cartSliderTargets[5]};
+  fetch("/api/set_target_pose_rpy", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) })
+    .then(r => r.json()).then(d => {
+      if (!d.success) document.getElementById("cartLog").innerHTML = `<div class="err">${d.error}</div>`;
+    }).catch(e => { document.getElementById("cartLog").innerHTML = `<div class="err">${e}</div>`; });
+}
+
+function toggleCartesianSending() {
+  cartSendingActive = !cartSendingActive;
+  const btn = document.getElementById("btnCartSend");
+  if (cartSendingActive) {
+    btn.textContent = "Stop Sending";
+    btn.style.background = "var(--orange)";
+    document.getElementById("cartLog").innerHTML = '<div class="ok">Sending target pose...</div>';
+    sendCartSliders();
+  } else {
+    btn.textContent = "Start Sending";
+    btn.style.background = "var(--blue)";
+    document.getElementById("cartLog").innerHTML = '<div>Sending stopped</div>';
+  }
+}
+
+function updateCartCtrlBtn() {
+  const btn = document.getElementById("btnCartCtrl");
+  if (cartControllerActive) {
+    btn.textContent = "Disable Cartesian Impedance Controller";
+    btn.style.background = "var(--green)";
+  } else {
+    btn.textContent = "Enable Cartesian Impedance Controller";
+    btn.style.background = "var(--accent)";
+  }
+}
+
+function toggleCartesianController() {
+  const log = document.getElementById("cartLog");
+  const btn = document.getElementById("btnCartCtrl");
+  if (!cartControllerActive) {
+    log.innerHTML = '<div>Activating cartesian_impedance_controller...</div>';
+    fetch("/api/switch_controller", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({controller:"cartesian_impedance_controller"})})
+      .then(r => r.json()).then(d => {
+        if (d.success) { log.innerHTML = '<div class="ok">Cartesian impedance controller activated</div>'; }
+        else { log.innerHTML = `<div class="err">${d.error}</div>`; }
+        refreshControllers();
+      }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
+  } else {
+    const fallback = availableControllers.includes("scaled_joint_trajectory_controller")
+      ? "scaled_joint_trajectory_controller" : "forward_effort_controller";
+    log.innerHTML = `<div>Deactivating, switching to ${fallback}...</div>`;
+    fetch("/api/switch_controller", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({controller:fallback})})
+      .then(r => r.json()).then(d => {
+        if (d.success) { log.innerHTML = '<div class="ok">Cartesian controller deactivated</div>'; }
+        else { log.innerHTML = `<div class="err">${d.error}</div>`; }
+        refreshControllers();
+      }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });
+  }
+}
+
 const KEY_PARAMS={'Task Stiffness':['task.k_pos_x','task.k_pos_y','task.k_pos_z','task.k_rot_x','task.k_rot_y','task.k_rot_z'],'Task Damping':['task.d_pos_x','task.d_pos_y','task.d_pos_z','task.d_rot_x','task.d_rot_y','task.d_rot_z'],'Nullspace':['nullspace.stiffness','nullspace.damping','nullspace.max_tau'],'Filters':['filter.q','filter.dq','filter.output_torque','filter.target_pose'],'Safety':['max_delta_tau','limit_torques','limit_error','stop_commands']};
 let currentParams={};
 function loadParams(){const c=document.getElementById("paramCtrlSelect").value,ct=document.getElementById("paramsContainer"),l=document.getElementById("paramLog");if(!c){ct.innerHTML="";return;}ct.innerHTML='<div style="color:var(--dim)">Loading...</div>';if(c==="forward_position_controller"){fetch("/api/pos_control_params").then(r=>r.json()).then(d=>{renderPosParams(d);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});return;}fetch(`/api/params/${c}`).then(r=>r.json()).then(d=>{if(d.error){ct.innerHTML=`<div class="err">${d.error}</div>`;return;}currentParams=d.params;renderParams(c,d.params);l.innerHTML='';}).catch(e=>{ct.innerHTML=`<div class="err">${e}</div>`;});}
@@ -646,7 +781,7 @@ function toggleJointController(mode) {
   }
 }
 
-startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();drawPlot();checkConfigStatus();
+startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();initCartControls();drawPlot();checkConfigStatus();
 </script>
 </body>
 </html>

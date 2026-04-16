@@ -340,6 +340,11 @@ class WebControlServer:
                 "pitch": round(float(np.degrees(rpy[1])), 2),
                 "yaw": round(float(np.degrees(rpy[2])), 2),
             }
+            # Feed FK pose to cartesian impedance controller
+            from crisp_py.utils.geometry import Pose
+            from scipy.spatial.transform import Rotation
+            target_pose = Pose(position=pos, orientation=Rotation.from_quat(quat))
+            self.robot.set_target(pose=target_pose)
         except Exception:
             pass
         # Feed to joint impedance controller
@@ -523,6 +528,25 @@ class WebControlServer:
                 pos = np.array([data["x"], data["y"], data["z"]])
                 quat = [data["qx"], data["qy"], data["qz"], data["qw"]]
                 ori = Rotation.from_quat(quat)
+                target = Pose(position=pos, orientation=ori)
+                self.robot.set_target(pose=target)
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/set_target_pose_rpy", methods=["POST"])
+        def set_target_pose_rpy():
+            """Set target pose from position + RPY (degrees). Body: {"x","y","z","roll","pitch","yaw"}"""
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json()
+            try:
+                from crisp_py.utils.geometry import Pose
+                from scipy.spatial.transform import Rotation
+
+                pos = np.array([float(data["x"]), float(data["y"]), float(data["z"])])
+                rpy_deg = [float(data["roll"]), float(data["pitch"]), float(data["yaw"])]
+                ori = Rotation.from_euler('xyz', np.radians(rpy_deg))
                 target = Pose(position=pos, orientation=ori)
                 self.robot.set_target(pose=target)
                 return jsonify({"success": True})
@@ -783,6 +807,9 @@ class WebControlServer:
                                 "qy": round(float(pose.orientation.as_quat()[1]), 5),
                                 "qz": round(float(pose.orientation.as_quat()[2]), 5),
                                 "qw": round(float(pose.orientation.as_quat()[3]), 5),
+                                "roll": round(float(np.degrees(pose.orientation.as_euler('xyz')[0])), 2),
+                                "pitch": round(float(np.degrees(pose.orientation.as_euler('xyz')[1])), 2),
+                                "yaw": round(float(np.degrees(pose.orientation.as_euler('xyz')[2])), 2),
                             },
                             "joints": [round(float(v), 4) for v in joints],
                             "velocity": [round(float(v), 4) for v in vel] if vel is not None else [],
