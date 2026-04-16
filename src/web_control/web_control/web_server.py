@@ -25,7 +25,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from crisp_py.robot import make_robot
 from crisp_py.control.parameters_client import ParametersClient
 from common.workspace import get_config_path
-from ur15_dashboard.kinematics import fk_quaternion
+from ur15_dashboard.kinematics import fk_quaternion, quaternion_to_rpy
 
 try:
     from alicia_duo_leader_driver.msg import ArmJointState
@@ -331,10 +331,14 @@ class WebControlServer:
             pose_msg.pose.orientation.z = float(quat[2])
             pose_msg.pose.orientation.w = float(quat[3])
             self._cmd_target_pose_pub.publish(pose_msg)
+            rpy = quaternion_to_rpy(quat)
             self._cmd_target_pose = {
                 "x": round(float(pos[0]), 5), "y": round(float(pos[1]), 5), "z": round(float(pos[2]), 5),
                 "qx": round(float(quat[0]), 5), "qy": round(float(quat[1]), 5),
                 "qz": round(float(quat[2]), 5), "qw": round(float(quat[3]), 5),
+                "roll": round(float(np.degrees(rpy[0])), 2),
+                "pitch": round(float(np.degrees(rpy[1])), 2),
+                "yaw": round(float(np.degrees(rpy[2])), 2),
             }
         except Exception:
             pass
