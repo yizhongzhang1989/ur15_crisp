@@ -61,6 +61,14 @@
   .param-row input:focus { border-color: var(--blue); outline: none; }
   .param-row .pbtn { padding: 2px 10px; font-size: 0.8em; border: 1px solid var(--accent); background: transparent; color: var(--text); border-radius: 3px; cursor: pointer; }
   .param-row .pbtn:hover { background: var(--blue); } .param-row .ptype { color: var(--dim); font-size: 0.75em; min-width: 40px; }
+  .param-row .opt-cb { width: 14px; height: 14px; accent-color: var(--highlight); cursor: pointer; margin-left: 4px; }
+  .opt-table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 0.82em; }
+  .opt-table th { color: var(--dim); font-weight: normal; text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--accent); font-size: 0.85em; white-space: nowrap; }
+  .opt-table td { padding: 3px 6px; border-bottom: 1px solid rgba(255,255,255,0.04); white-space: nowrap; }
+  .opt-table input { width: 80px; padding: 2px 4px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 3px; font-family: monospace; font-size: 0.85em; }
+  .opt-table input:focus { border-color: var(--blue); outline: none; }
+  .opt-table .opt-name { color: var(--dim); max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  .opt-table .opt-val { color: var(--green); } .opt-table .opt-best { color: var(--orange); } .opt-table .opt-cur { color: var(--blue); }
   .full-width { grid-column: 1 / -1; }
   .log { font-family: monospace; font-size: 0.8em; color: var(--dim); max-height: 60px; overflow-y: auto; margin-top: 8px; }
   .log .err { color: var(--highlight); } .log .ok { color: var(--green); }
@@ -90,7 +98,7 @@
 </head>
 <body>
 <div class="monitor-bar">
-  <div class="bar-title"><span>CRISP</span> Web Control — UR15 &nbsp;<span class="status-dot wait" id="connDot"></span><span id="connText" style="font-size:0.7em;color:var(--dim)">Connecting...</span></div>
+  <div class="bar-title"><span>CRISP</span> Web Control — UR15 &nbsp;<span class="status-dot wait" id="connDot"></span><span id="connText" style="font-size:0.7em;color:var(--dim)">Connecting...</span> &nbsp; <span class="status-dot wait" id="robotDot"></span><span id="robotText" style="font-size:0.7em;color:var(--dim)">—</span></div>
   <div class="monitor-sections">
     <div class="monitor-section sec-pose">
       <div class="pose-compact">
@@ -181,8 +189,9 @@
     </div>
   </div>
 
-  <!-- Row 3: Parameters -->
-  <div class="card" style="margin-top:12px;">
+  <!-- Row 3: Parameters + Auto Optimization side-by-side -->
+  <div style="display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:12px; margin-top:12px;">
+  <div class="card" style="min-width:0;">
     <h2>Controller Parameters</h2>
     <div class="step-row" style="margin-bottom:10px;"><label>Controller:</label>
       <select id="paramCtrlSelect" onchange="loadParams()" style="padding:4px 8px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;min-width:250px;">
@@ -195,6 +204,34 @@
       <span id="configStatus" style="font-size:0.8em; color:var(--dim);"></span>
     </div>
     <div class="log" id="paramLog"></div>
+  </div>
+
+  <!-- Row 4: Auto Optimization -->
+  <div class="card" style="min-width:0;">
+    <h2>Auto Optimization</h2>
+    <div style="font-size:0.85em;color:var(--dim);margin-bottom:8px;">
+      Enable a controller + teleop / sliders to publish <code>/cmd_target_joint</code> &amp; <code>/cmd_target_pose</code>, then record a reference trajectory. It is stored at <code>tmp/param_opt/reference_trajectory.npz</code>.
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+      <button id="btnOptRec" class="btn-send" onclick="optToggleRecord()" style="background:var(--highlight);">Start Recording</button>
+      <button id="btnOptSave" class="btn-send" onclick="optSave()" style="background:var(--green);">Save</button>
+      <button id="btnOptReplay" class="btn-send" onclick="optToggleReplay()">Replay</button>
+      <button id="btnOptDelete" class="btn-copy" onclick="optDelete()" style="background:var(--highlight);">Delete</button>
+    </div>
+    <div id="optStatus" style="font-family:monospace;font-size:0.9em;margin-bottom:10px;padding:6px 10px;background:var(--bg);border-radius:4px;">Idle.</div>
+    <div id="optSavedInfo" style="font-family:monospace;font-size:0.85em;color:var(--dim);margin-bottom:8px;"></div>
+    <h3 style="font-size:0.85em; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin:8px 0 4px;">Optimization Parameters</h3>
+    <div id="optParamsTable" style="max-height:300px;overflow-y:auto;"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center;">
+      <div class="step-row"><label>Trials:</label>
+        <input type="number" id="optNTrials" value="20" step="1" min="1" max="500" style="width:60px;">
+      </div>
+      <button id="btnOptRun" class="btn-send" onclick="optToggleRun()" style="background:var(--green);">Start Optimization</button>
+      <button id="btnOptApply" class="btn-send" onclick="optApplyBest()" style="background:var(--orange);">Apply Best</button>
+    </div>
+    <h3 style="font-size:0.85em; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin:12px 0 4px;">Experiment History</h3>
+    <div id="optExperiments" style="font-family:monospace;font-size:0.82em;max-height:200px;overflow-y:auto;"></div>
+  </div>
   </div>
 </div>
 <script>
@@ -510,7 +547,7 @@ function renderParams(c,p){
   }
   ct.innerHTML=h||'<div style="color:var(--dim)">No parameters</div>';
 }
-function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_;return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${ib?'bool':in_?'num':t}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}',${ib})">Set</button>`:''}</div>`;}
+function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_;const optCb=in_?`<input type="checkbox" class="opt-cb" title="Include in optimization" ${optSelectedParams[c+'::'+n]?'checked':''} onchange="optToggleParam('${c}','${n}',${v},this.checked)">`:'';return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${ib?'bool':in_?'num':t}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}',${ib})">Set</button>`:''}${optCb}</div>`;}
 function setParam(c,n,id,ib){const el=document.getElementById(id);let v=ib?el.value==='true':parseFloat(el.value);if(!ib&&isNaN(v)){document.getElementById("paramLog").innerHTML='<div class="err">Invalid number</div>';return;}const l=document.getElementById("paramLog");l.innerHTML=`<div>Setting ${n} = ${v}...</div>`;fetch(`/api/params/${c}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({params:{[n]:v}})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Set ${n} = ${v}</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 
 // === Real-time Plot ===
@@ -801,7 +838,271 @@ function toggleJointController(mode) {
   }
 }
 
+// === Auto Optimization ===
+// optSelectedParams: { "controller::param.name": { ref: number, min: number, max: number, current: null, best: null } }
+let optSelectedParams = {};
+function optToggleParam(controller, name, refVal, checked) {
+  const key = controller + '::' + name;
+  if (checked) {
+    if (!optSelectedParams[key]) {
+      const margin = Math.abs(refVal) * 0.5 || 1.0;
+      optSelectedParams[key] = {
+        controller: controller,
+        param: name,
+        ref: refVal,
+        min: parseFloat((refVal - margin).toPrecision(4)),
+        max: parseFloat((refVal + margin).toPrecision(4)),
+        current: null,
+        best: null,
+      };
+    } else {
+      optSelectedParams[key].ref = refVal;
+    }
+  } else {
+    delete optSelectedParams[key];
+  }
+  renderOptParamsTable();
+}
+function renderOptParamsTable() {
+  const div = document.getElementById("optParamsTable");
+  const keys = Object.keys(optSelectedParams);
+  if (keys.length === 0) {
+    div.innerHTML = '<span style="color:var(--dim);font-size:0.85em;">No parameters selected. Check ☐ boxes in Controller Parameters.</span>';
+    return;
+  }
+  let h = '<table class="opt-table"><thead><tr><th>Parameter</th><th>Ref</th><th>Min</th><th>Max</th><th>Current</th><th>Best</th><th></th></tr></thead><tbody>';
+  for (const key of keys) {
+    const p = optSelectedParams[key];
+    const sid = key.replace(/[.:]/g, '_');
+    h += `<tr>
+      <td class="opt-name" title="${p.controller} / ${p.param}">${p.param}</td>
+      <td class="opt-val">${p.ref}</td>
+      <td><input type="number" id="optMin_${sid}" value="${p.min}" step="any" onchange="optUpdateBound('${key}','min',this.value)"></td>
+      <td><input type="number" id="optMax_${sid}" value="${p.max}" step="any" onchange="optUpdateBound('${key}','max',this.value)"></td>
+      <td class="opt-cur">${p.current !== null ? p.current : '—'}</td>
+      <td class="opt-best">${p.best !== null ? p.best : '—'}</td>
+      <td><button class="pbtn" onclick="optRemoveParam('${key}')" style="border-color:var(--highlight);font-size:0.75em;">✕</button></td>
+    </tr>`;
+  }
+  h += '</tbody></table>';
+  div.innerHTML = h;
+}
+function optUpdateBound(key, which, val) {
+  if (!optSelectedParams[key]) return;
+  optSelectedParams[key][which] = parseFloat(val);
+}
+function optRemoveParam(key) {
+  delete optSelectedParams[key];
+  renderOptParamsTable();
+  // Uncheck the corresponding checkbox in the param panel
+  const parts = key.split('::');
+  const id = 'param_' + parts[1].replace(/\./g, '_');
+  const row = document.getElementById(id);
+  if (row) {
+    const cb = row.closest('.param-row')?.querySelector('.opt-cb');
+    if (cb) cb.checked = false;
+  }
+}
+// Status bar: single #optStatus element. optLog sets a message; poller overwrites with live state when active.
+let _optLiveState = false; // true when poller is showing live activity (rec/replay)
+function optLog(msg, cls){
+  if(_optLiveState) return; // don't overwrite live state
+  const el=document.getElementById("optStatus");
+  if(cls==="err") el.innerHTML=`<span style="color:var(--highlight)">${msg}</span>`;
+  else if(cls==="ok") el.innerHTML=`<span style="color:var(--green)">${msg}</span>`;
+  else el.innerHTML=msg;
+}
+function optToggleRecord(){
+  const btn=document.getElementById("btnOptRec");
+  const isRec=btn.dataset.state==="recording";
+  const url=isRec?"/api/opt/stop_record":"/api/opt/record";
+  fetch(url,{method:"POST"}).then(r=>r.json()).then(d=>{
+    if(d.success){
+      if(isRec) optLog("Recording stopped \u2014 click Save to persist.","ok");
+    } else optLog(d.error||"failed","err");
+  }).catch(e=>optLog(String(e),"err"));
+}
+function optSave(){
+  fetch("/api/opt/save",{method:"POST"}).then(r=>r.json()).then(d=>{
+    if(d.success)optLog("Trajectory saved.","ok");else optLog(d.error||"save failed","err");
+  });
+}
+function optDelete(){
+  if(!confirm("Delete the saved trajectory and clear in-memory buffer?"))return;
+  fetch("/api/opt/delete",{method:"POST"}).then(r=>r.json()).then(d=>{
+    if(d.success)optLog(d.removed?"Deleted saved trajectory.":"Buffer cleared (no file).","ok");
+    else optLog(d.error||"delete failed","err");
+  });
+}
+function optToggleReplay(){
+  const btn=document.getElementById("btnOptReplay");
+  if(btn.dataset.state==="replaying"){
+    fetch("/api/opt/stop_replay",{method:"POST"}).then(r=>r.json()).then(d=>{
+      if(!d.success)optLog(d.error||"stop failed","err");
+    });
+  } else {
+    fetch("/api/opt/replay",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})})
+      .then(r=>r.json()).then(d=>{if(!d.success)optLog(d.error,"err");})
+      .catch(e=>optLog(String(e),"err"));
+  }
+}
+function optToggleRun(){
+  const btn=document.getElementById("btnOptRun");
+  if(btn.dataset.state==="running"){
+    fetch("/api/opt/stop",{method:"POST"}).then(r=>r.json()).then(d=>{
+      if(!d.success)optLog(d.error||"stop failed","err");
+    });
+  } else {
+    // Build config from optSelectedParams
+    const keys=Object.keys(optSelectedParams);
+    if(keys.length===0){optLog("Select parameters to optimize first.","err");return;}
+    // All params must be from the same controller
+    const controllers=new Set(keys.map(k=>optSelectedParams[k].controller));
+    if(controllers.size>1){optLog("All params must be from the same controller.","err");return;}
+    const controller=[...controllers][0];
+    const params={};
+    for(const k of keys){
+      const p=optSelectedParams[k];
+      if(p.min>=p.max){optLog(`${p.param}: min must be < max`,"err");return;}
+      params[p.param]={min:p.min, max:p.max, ref:p.ref};
+    }
+    const n_trials=parseInt(document.getElementById("optNTrials").value)||20;
+    const config={controller, params, n_trials};
+    fetch("/api/opt/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(config)})
+      .then(r=>r.json()).then(d=>{if(!d.success)optLog(d.error,"err");})
+      .catch(e=>optLog(String(e),"err"));
+  }
+}
+function optApplyBest(){
+  fetch("/api/opt/apply_best",{method:"POST"}).then(r=>r.json()).then(d=>{
+    if(d.success){optLog("Applied best params.","ok");loadParams();}
+    else optLog(d.error||"apply failed","err");
+  });
+}
+function optRefreshExperiments(){
+  fetch("/api/opt/experiments").then(r=>r.json()).then(d=>{
+    const div=document.getElementById("optExperiments");
+    if(!d.experiments||d.experiments.length===0){
+      div.innerHTML='<span style="color:var(--dim)">No experiments yet.</span>';
+      return;
+    }
+    div.innerHTML=d.experiments.map(e=>{
+      const rmse=e.best_rmse!==null&&e.best_rmse!==undefined?e.best_rmse.toFixed(6):'—';
+      const info=e.controller?`${e.controller} | ${e.n_completed||0}/${e.n_trials||0} trials | best: ${rmse}`:(e.error||'incomplete');
+      const params=e.param_names?e.param_names.join(', '):'';
+      return `<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+        <div><b>${e.name}</b> <span style="color:var(--dim)">${e.timestamp||''}</span></div>
+        <div style="color:var(--dim);font-size:0.9em;">${info}${params?' | '+params:''}</div>
+        <div style="margin-top:2px;">
+          ${e.has_report?`<button class="pbtn" onclick="window.open('/api/opt/report?name=${encodeURIComponent(e.name)}','_blank')">Report</button>`:`<button class="pbtn" onclick="optResumeExperiment('${e.name}')" style="border-color:var(--green);">Resume</button>`}
+          <button class="pbtn" onclick="optDeleteExperiment('${e.name}')" style="border-color:var(--highlight);">Delete</button>
+        </div>
+      </div>`;
+    }).join("");
+  }).catch(()=>{});
+}
+function optDeleteExperiment(name){
+  if(!confirm('Delete experiment '+name+'?'))return;
+  fetch('/api/opt/experiments/'+encodeURIComponent(name),{method:'DELETE'}).then(r=>r.json()).then(d=>{
+    if(d.success)optRefreshExperiments();
+    else optLog(d.error||'delete failed','err');
+  });
+}
+function optResumeExperiment(name){
+  // Resume uses the same config from optSelectedParams
+  const keys=Object.keys(optSelectedParams);
+  if(keys.length===0){optLog("Select parameters to optimize first.","err");return;}
+  const controllers=new Set(keys.map(k=>optSelectedParams[k].controller));
+  if(controllers.size>1){optLog("All params must be from the same controller.","err");return;}
+  const controller=[...controllers][0];
+  const params={};
+  for(const k of keys){
+    const p=optSelectedParams[k];
+    params[p.param]={min:p.min, max:p.max, ref:p.ref};
+  }
+  const n_trials=parseInt(document.getElementById("optNTrials").value)||20;
+  const config={controller, params, n_trials, resume_exp: name};
+  fetch("/api/opt/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(config)})
+    .then(r=>r.json()).then(d=>{if(!d.success)optLog(d.error,"err");})
+    .catch(e=>optLog(String(e),"err"));
+}
+function optPollStatus(){
+  fetch("/api/opt/status").then(r=>r.json()).then(s=>{
+    const el=document.getElementById("optStatus");
+    // Update record button
+    const btn=document.getElementById("btnOptRec");
+    if(btn){
+      if(s.recording){ btn.dataset.state="recording"; btn.textContent="Stop Recording"; btn.style.background="var(--accent)"; }
+      else { btn.dataset.state="idle"; btn.textContent="Start Recording"; btn.style.background="var(--highlight)"; }
+    }
+    // Update replay button
+    const rbtn=document.getElementById("btnOptReplay");
+    if(rbtn){
+      if(s.replaying&&!s.optimizing){ rbtn.dataset.state="replaying"; rbtn.textContent="Stop Replay"; rbtn.style.background="var(--accent)"; }
+      else if(!s.replaying){
+        if(rbtn.dataset.state==="replaying") optLog("Replay complete.","ok");
+        rbtn.dataset.state="idle"; rbtn.textContent="Replay"; rbtn.style.background="var(--blue)";
+      }
+    }
+    // Update optimization button
+    const obtn=document.getElementById("btnOptRun");
+    if(obtn){
+      if(s.optimizing){ obtn.dataset.state="running"; obtn.textContent="Stop Optimization"; obtn.style.background="var(--accent)"; }
+      else {
+        if(obtn.dataset.state==="running"){ optLog(s.opt_message,"ok"); optRefreshExperiments(); }
+        obtn.dataset.state="idle"; obtn.textContent="Start Optimization"; obtn.style.background="var(--green)";
+      }
+    }
+    // Update robot status indicator in top bar
+    const rdot=document.getElementById("robotDot");
+    const rtxt=document.getElementById("robotText");
+    if(rdot&&rtxt){
+      if(s.robot_ok){rdot.className="status-dot ok";rtxt.textContent="Robot OK";rtxt.style.color="var(--green)";}
+      else{rdot.className="status-dot err";rtxt.textContent=(s.safety_answer||"FAULT")+" | "+(s.robot_answer||"");rtxt.style.color="var(--highlight)";}
+    }
+    // Build live status line
+    let live=null;
+    if(!s.robot_ok){
+      live=`<span style="color:var(--highlight)">⚠ ${s.safety_answer||'FAULT'} | ${s.robot_answer||''}</span>`;
+    } else if(s.recording){
+      live=`<span style="color:var(--highlight)">● REC</span> ${s.rec_elapsed.toFixed(1)}s — joints: ${s.rec_frames.cmd_joint} actual: ${s.rec_frames.actual}`;
+    } else if(s.optimizing){
+      live=`<span style="color:var(--green)">⚙ OPT</span> ${s.opt_message||('Trial '+s.opt_trial+'/'+s.opt_n_trials)}`;
+    } else if(s.replaying){
+      live=`<span style="color:var(--blue)">▶ REPLAY</span> ${(s.replay_progress*100).toFixed(0)}%`;
+    }
+    if(live){ el.innerHTML=live; _optLiveState=true; }
+    else if(s.opt_message&&!s.optimizing&&s.opt_best_value!==null){
+      // Show final result even when idle
+      el.innerHTML=`<span style="color:var(--green)">${s.opt_message}</span>`;
+      _optLiveState=true; // keep showing until user does something
+    }
+    else { _optLiveState=false; }
+    // Update current/best in opt params table
+    if(s.opt_current_params||s.opt_best_params){
+      for(const key of Object.keys(optSelectedParams)){
+        const p=optSelectedParams[key];
+        const pname=p.param;
+        if(s.opt_current_params&&pname in s.opt_current_params) p.current=s.opt_current_params[pname];
+        if(s.opt_best_params&&pname in s.opt_best_params) p.best=s.opt_best_params[pname];
+      }
+      renderOptParamsTable();
+    }
+    // Saved trajectory info
+    const info=document.getElementById("optSavedInfo");
+    if(s.saved&&s.saved_meta){
+      const m=s.saved_meta;
+      info.innerHTML=`Saved: ${(m.duration||0).toFixed(1)}s, ${m.n_cmd_joint} joint frames, ${m.n_actual} actual frames — ${m.recorded_at||''}`;
+    } else if(s.has_buffer){
+      info.innerHTML=`<span style="color:var(--orange)">Unsaved buffer: ${s.rec_elapsed.toFixed(1)}s, ${s.rec_frames.cmd_joint} frames</span>`;
+    } else {
+      info.innerHTML='<span style="color:var(--dim)">No trajectory.</span>';
+    }
+  }).catch(()=>{});
+}
+
 startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();initCartControls();drawPlot();checkConfigStatus();
+setInterval(optPollStatus,500);renderOptParamsTable();optRefreshExperiments();
 </script>
 </body>
 </html>
