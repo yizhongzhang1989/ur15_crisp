@@ -61,6 +61,14 @@
   .param-row input:focus { border-color: var(--blue); outline: none; }
   .param-row .pbtn { padding: 2px 10px; font-size: 0.8em; border: 1px solid var(--accent); background: transparent; color: var(--text); border-radius: 3px; cursor: pointer; }
   .param-row .pbtn:hover { background: var(--blue); } .param-row .ptype { color: var(--dim); font-size: 0.75em; min-width: 40px; }
+  .param-row .opt-cb { width: 14px; height: 14px; accent-color: var(--highlight); cursor: pointer; margin-left: 4px; }
+  .opt-table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 0.82em; }
+  .opt-table th { color: var(--dim); font-weight: normal; text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--accent); font-size: 0.85em; white-space: nowrap; }
+  .opt-table td { padding: 3px 6px; border-bottom: 1px solid rgba(255,255,255,0.04); white-space: nowrap; }
+  .opt-table input { width: 80px; padding: 2px 4px; background: var(--bg); border: 1px solid var(--accent); color: var(--text); border-radius: 3px; font-family: monospace; font-size: 0.85em; }
+  .opt-table input:focus { border-color: var(--blue); outline: none; }
+  .opt-table .opt-name { color: var(--dim); max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  .opt-table .opt-val { color: var(--green); } .opt-table .opt-best { color: var(--orange); } .opt-table .opt-cur { color: var(--blue); }
   .full-width { grid-column: 1 / -1; }
   .log { font-family: monospace; font-size: 0.8em; color: var(--dim); max-height: 60px; overflow-y: auto; margin-top: 8px; }
   .log .err { color: var(--highlight); } .log .ok { color: var(--green); }
@@ -211,7 +219,9 @@
       <button id="btnOptDelete" class="btn-copy" onclick="optDelete()" style="background:var(--highlight);">Delete</button>
     </div>
     <div id="optStatus" style="font-family:monospace;font-size:0.9em;margin-bottom:10px;padding:6px 10px;background:var(--bg);border-radius:4px;">Idle.</div>
-    <div id="optSavedInfo" style="font-family:monospace;font-size:0.85em;color:var(--dim);"></div>
+    <div id="optSavedInfo" style="font-family:monospace;font-size:0.85em;color:var(--dim);margin-bottom:8px;"></div>
+    <h3 style="font-size:0.85em; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin:8px 0 4px;">Optimization Parameters</h3>
+    <div id="optParamsTable" style="max-height:300px;overflow-y:auto;"></div>
     <div class="log" id="optLog"></div>
   </div>
   </div>
@@ -529,7 +539,7 @@ function renderParams(c,p){
   }
   ct.innerHTML=h||'<div style="color:var(--dim)">No parameters</div>';
 }
-function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_;return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${ib?'bool':in_?'num':t}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}',${ib})">Set</button>`:''}</div>`;}
+function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_;const optCb=in_?`<input type="checkbox" class="opt-cb" title="Include in optimization" ${optSelectedParams[c+'::'+n]?'checked':''} onchange="optToggleParam('${c}','${n}',${v},this.checked)">`:'';return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${ib?'bool':in_?'num':t}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}',${ib})">Set</button>`:''}${optCb}</div>`;}
 function setParam(c,n,id,ib){const el=document.getElementById(id);let v=ib?el.value==='true':parseFloat(el.value);if(!ib&&isNaN(v)){document.getElementById("paramLog").innerHTML='<div class="err">Invalid number</div>';return;}const l=document.getElementById("paramLog");l.innerHTML=`<div>Setting ${n} = ${v}...</div>`;fetch(`/api/params/${c}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({params:{[n]:v}})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Set ${n} = ${v}</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 
 // === Real-time Plot ===
@@ -821,6 +831,70 @@ function toggleJointController(mode) {
 }
 
 // === Auto Optimization ===
+// optSelectedParams: { "controller::param.name": { ref: number, min: number, max: number, current: null, best: null } }
+let optSelectedParams = {};
+function optToggleParam(controller, name, refVal, checked) {
+  const key = controller + '::' + name;
+  if (checked) {
+    if (!optSelectedParams[key]) {
+      const margin = Math.abs(refVal) * 0.5 || 1.0;
+      optSelectedParams[key] = {
+        controller: controller,
+        param: name,
+        ref: refVal,
+        min: parseFloat((refVal - margin).toPrecision(4)),
+        max: parseFloat((refVal + margin).toPrecision(4)),
+        current: null,
+        best: null,
+      };
+    } else {
+      optSelectedParams[key].ref = refVal;
+    }
+  } else {
+    delete optSelectedParams[key];
+  }
+  renderOptParamsTable();
+}
+function renderOptParamsTable() {
+  const div = document.getElementById("optParamsTable");
+  const keys = Object.keys(optSelectedParams);
+  if (keys.length === 0) {
+    div.innerHTML = '<span style="color:var(--dim);font-size:0.85em;">No parameters selected. Check ☐ boxes in Controller Parameters.</span>';
+    return;
+  }
+  let h = '<table class="opt-table"><thead><tr><th>Parameter</th><th>Ref</th><th>Min</th><th>Max</th><th>Current</th><th>Best</th><th></th></tr></thead><tbody>';
+  for (const key of keys) {
+    const p = optSelectedParams[key];
+    const sid = key.replace(/[.:]/g, '_');
+    h += `<tr>
+      <td class="opt-name" title="${p.controller} / ${p.param}">${p.param}</td>
+      <td class="opt-val">${p.ref}</td>
+      <td><input type="number" id="optMin_${sid}" value="${p.min}" step="any" onchange="optUpdateBound('${key}','min',this.value)"></td>
+      <td><input type="number" id="optMax_${sid}" value="${p.max}" step="any" onchange="optUpdateBound('${key}','max',this.value)"></td>
+      <td class="opt-cur">${p.current !== null ? p.current : '—'}</td>
+      <td class="opt-best">${p.best !== null ? p.best : '—'}</td>
+      <td><button class="pbtn" onclick="optRemoveParam('${key}')" style="border-color:var(--highlight);font-size:0.75em;">✕</button></td>
+    </tr>`;
+  }
+  h += '</tbody></table>';
+  div.innerHTML = h;
+}
+function optUpdateBound(key, which, val) {
+  if (!optSelectedParams[key]) return;
+  optSelectedParams[key][which] = parseFloat(val);
+}
+function optRemoveParam(key) {
+  delete optSelectedParams[key];
+  renderOptParamsTable();
+  // Uncheck the corresponding checkbox in the param panel
+  const parts = key.split('::');
+  const id = 'param_' + parts[1].replace(/\./g, '_');
+  const row = document.getElementById(id);
+  if (row) {
+    const cb = row.closest('.param-row')?.querySelector('.opt-cb');
+    if (cb) cb.checked = false;
+  }
+}
 function optLog(msg, cls){const l=document.getElementById("optLog");l.innerHTML=`<div class="${cls||''}">${msg}</div>`;}
 function optToggleRecord(){
   const btn=document.getElementById("btnOptRec");
@@ -905,7 +979,7 @@ function optPollStatus(){
 }
 
 startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();initCartControls();drawPlot();checkConfigStatus();
-setInterval(optPollStatus,500);
+setInterval(optPollStatus,500);renderOptParamsTable();
 </script>
 </body>
 </html>
