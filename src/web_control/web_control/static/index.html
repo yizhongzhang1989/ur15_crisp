@@ -98,7 +98,7 @@
 </head>
 <body>
 <div class="monitor-bar">
-  <div class="bar-title"><span>CRISP</span> Web Control — UR15 &nbsp;<span class="status-dot wait" id="connDot"></span><span id="connText" style="font-size:0.7em;color:var(--dim)">Connecting...</span></div>
+  <div class="bar-title"><span>CRISP</span> Web Control — UR15 &nbsp;<span class="status-dot wait" id="connDot"></span><span id="connText" style="font-size:0.7em;color:var(--dim)">Connecting...</span> &nbsp; <span class="status-dot wait" id="robotDot"></span><span id="robotText" style="font-size:0.7em;color:var(--dim)">—</span></div>
   <div class="monitor-sections">
     <div class="monitor-section sec-pose">
       <div class="pose-compact">
@@ -229,6 +229,8 @@
       <button id="btnOptRun" class="btn-send" onclick="optToggleRun()" style="background:var(--green);">Start Optimization</button>
       <button id="btnOptApply" class="btn-send" onclick="optApplyBest()" style="background:var(--orange);">Apply Best</button>
     </div>
+    <h3 style="font-size:0.85em; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin:12px 0 4px;">Experiment History</h3>
+    <div id="optExperiments" style="font-family:monospace;font-size:0.82em;max-height:200px;overflow-y:auto;"></div>
   </div>
   </div>
 </div>
@@ -977,6 +979,53 @@ function optApplyBest(){
     else optLog(d.error||"apply failed","err");
   });
 }
+function optRefreshExperiments(){
+  fetch("/api/opt/experiments").then(r=>r.json()).then(d=>{
+    const div=document.getElementById("optExperiments");
+    if(!d.experiments||d.experiments.length===0){
+      div.innerHTML='<span style="color:var(--dim)">No experiments yet.</span>';
+      return;
+    }
+    div.innerHTML=d.experiments.map(e=>{
+      const rmse=e.best_rmse!==null&&e.best_rmse!==undefined?e.best_rmse.toFixed(6):'—';
+      const info=e.controller?`${e.controller} | ${e.n_completed||0}/${e.n_trials||0} trials | best: ${rmse}`:(e.error||'incomplete');
+      const params=e.param_names?e.param_names.join(', '):'';
+      return `<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+        <div><b>${e.name}</b> <span style="color:var(--dim)">${e.timestamp||''}</span></div>
+        <div style="color:var(--dim);font-size:0.9em;">${info}${params?' | '+params:''}</div>
+        <div style="margin-top:2px;">
+          ${e.has_report?`<button class="pbtn" onclick="window.open('/api/opt/report?name=${encodeURIComponent(e.name)}','_blank')">Report</button>`:`<button class="pbtn" onclick="optResumeExperiment('${e.name}')" style="border-color:var(--green);">Resume</button>`}
+          <button class="pbtn" onclick="optDeleteExperiment('${e.name}')" style="border-color:var(--highlight);">Delete</button>
+        </div>
+      </div>`;
+    }).join("");
+  }).catch(()=>{});
+}
+function optDeleteExperiment(name){
+  if(!confirm('Delete experiment '+name+'?'))return;
+  fetch('/api/opt/experiments/'+encodeURIComponent(name),{method:'DELETE'}).then(r=>r.json()).then(d=>{
+    if(d.success)optRefreshExperiments();
+    else optLog(d.error||'delete failed','err');
+  });
+}
+function optResumeExperiment(name){
+  // Resume uses the same config from optSelectedParams
+  const keys=Object.keys(optSelectedParams);
+  if(keys.length===0){optLog("Select parameters to optimize first.","err");return;}
+  const controllers=new Set(keys.map(k=>optSelectedParams[k].controller));
+  if(controllers.size>1){optLog("All params must be from the same controller.","err");return;}
+  const controller=[...controllers][0];
+  const params={};
+  for(const k of keys){
+    const p=optSelectedParams[k];
+    params[p.param]={min:p.min, max:p.max, ref:p.ref};
+  }
+  const n_trials=parseInt(document.getElementById("optNTrials").value)||20;
+  const config={controller, params, n_trials, resume_exp: name};
+  fetch("/api/opt/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(config)})
+    .then(r=>r.json()).then(d=>{if(!d.success)optLog(d.error,"err");})
+    .catch(e=>optLog(String(e),"err"));
+}
 function optPollStatus(){
   fetch("/api/opt/status").then(r=>r.json()).then(s=>{
     const el=document.getElementById("optStatus");
@@ -1000,13 +1049,22 @@ function optPollStatus(){
     if(obtn){
       if(s.optimizing){ obtn.dataset.state="running"; obtn.textContent="Stop Optimization"; obtn.style.background="var(--accent)"; }
       else {
-        if(obtn.dataset.state==="running"&&s.opt_message) optLog(s.opt_message,"ok");
+        if(obtn.dataset.state==="running"){ optLog(s.opt_message,"ok"); optRefreshExperiments(); }
         obtn.dataset.state="idle"; obtn.textContent="Start Optimization"; obtn.style.background="var(--green)";
       }
     }
+    // Update robot status indicator in top bar
+    const rdot=document.getElementById("robotDot");
+    const rtxt=document.getElementById("robotText");
+    if(rdot&&rtxt){
+      if(s.robot_ok){rdot.className="status-dot ok";rtxt.textContent="Robot OK";rtxt.style.color="var(--green)";}
+      else{rdot.className="status-dot err";rtxt.textContent=(s.safety_answer||"FAULT")+" | "+(s.robot_answer||"");rtxt.style.color="var(--highlight)";}
+    }
     // Build live status line
     let live=null;
-    if(s.recording){
+    if(!s.robot_ok){
+      live=`<span style="color:var(--highlight)">⚠ ${s.safety_answer||'FAULT'} | ${s.robot_answer||''}</span>`;
+    } else if(s.recording){
       live=`<span style="color:var(--highlight)">● REC</span> ${s.rec_elapsed.toFixed(1)}s — joints: ${s.rec_frames.cmd_joint} actual: ${s.rec_frames.actual}`;
     } else if(s.optimizing){
       live=`<span style="color:var(--green)">⚙ OPT</span> ${s.opt_message||('Trial '+s.opt_trial+'/'+s.opt_n_trials)}`;
@@ -1044,7 +1102,7 @@ function optPollStatus(){
 }
 
 startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();initCartControls();drawPlot();checkConfigStatus();
-setInterval(optPollStatus,500);renderOptParamsTable();
+setInterval(optPollStatus,500);renderOptParamsTable();optRefreshExperiments();
 </script>
 </body>
 </html>

@@ -849,7 +849,8 @@ class WebControlServer:
                 return jsonify({"error": "Robot not ready"}), 503
             data = request.get_json() or {}
             try:
-                self._opt_mgr.start_optimization(data, self._get_param_client)
+                resume_exp = data.pop("resume_exp", None)
+                self._opt_mgr.start_optimization(data, self._get_param_client, resume_exp=resume_exp)
                 return jsonify({"success": True})
             except Exception as e:
                 return jsonify({"error": str(e)}), 400
@@ -874,6 +875,35 @@ class WebControlServer:
                 best = self._opt_mgr.apply_best(self._get_param_client)
                 return jsonify({"success": True, "params": best})
             except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @app.route("/api/opt/report")
+        def opt_report():
+            """Serve report for the latest experiment, or by name query param."""
+            name = request.args.get("name", "")
+            if name:
+                try:
+                    path = self._opt_mgr.get_experiment_report_path(name)
+                    return send_from_directory(os.path.dirname(path), "report.html")
+                except FileNotFoundError as e:
+                    return jsonify({"error": str(e)}), 404
+            # Fallback: latest experiment
+            exps = self._opt_mgr.list_experiments()
+            for exp in exps:
+                if exp.get("has_report"):
+                    return send_from_directory(exp["path"], "report.html")
+            return jsonify({"error": "No report available."}), 404
+
+        @app.route("/api/opt/experiments")
+        def opt_experiments():
+            return jsonify({"experiments": self._opt_mgr.list_experiments()})
+
+        @app.route("/api/opt/experiments/<name>", methods=["DELETE"])
+        def opt_delete_experiment(name):
+            try:
+                self._opt_mgr.delete_experiment(name)
+                return jsonify({"success": True})
+            except (FileNotFoundError, ValueError) as e:
                 return jsonify({"error": str(e)}), 400
 
         @app.route("/api/stream")
