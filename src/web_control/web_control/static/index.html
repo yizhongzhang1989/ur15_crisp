@@ -222,6 +222,13 @@
     <div id="optSavedInfo" style="font-family:monospace;font-size:0.85em;color:var(--dim);margin-bottom:8px;"></div>
     <h3 style="font-size:0.85em; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin:8px 0 4px;">Optimization Parameters</h3>
     <div id="optParamsTable" style="max-height:300px;overflow-y:auto;"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center;">
+      <div class="step-row"><label>Trials:</label>
+        <input type="number" id="optNTrials" value="20" step="1" min="1" max="500" style="width:60px;">
+      </div>
+      <button id="btnOptRun" class="btn-send" onclick="optToggleRun()" style="background:var(--green);">Start Optimization</button>
+      <button id="btnOptApply" class="btn-send" onclick="optApplyBest()" style="background:var(--orange);">Apply Best</button>
+    </div>
   </div>
   </div>
 </div>
@@ -937,6 +944,39 @@ function optToggleReplay(){
       .catch(e=>optLog(String(e),"err"));
   }
 }
+function optToggleRun(){
+  const btn=document.getElementById("btnOptRun");
+  if(btn.dataset.state==="running"){
+    fetch("/api/opt/stop",{method:"POST"}).then(r=>r.json()).then(d=>{
+      if(!d.success)optLog(d.error||"stop failed","err");
+    });
+  } else {
+    // Build config from optSelectedParams
+    const keys=Object.keys(optSelectedParams);
+    if(keys.length===0){optLog("Select parameters to optimize first.","err");return;}
+    // All params must be from the same controller
+    const controllers=new Set(keys.map(k=>optSelectedParams[k].controller));
+    if(controllers.size>1){optLog("All params must be from the same controller.","err");return;}
+    const controller=[...controllers][0];
+    const params={};
+    for(const k of keys){
+      const p=optSelectedParams[k];
+      if(p.min>=p.max){optLog(`${p.param}: min must be < max`,"err");return;}
+      params[p.param]={min:p.min, max:p.max, ref:p.ref};
+    }
+    const n_trials=parseInt(document.getElementById("optNTrials").value)||20;
+    const config={controller, params, n_trials};
+    fetch("/api/opt/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(config)})
+      .then(r=>r.json()).then(d=>{if(!d.success)optLog(d.error,"err");})
+      .catch(e=>optLog(String(e),"err"));
+  }
+}
+function optApplyBest(){
+  fetch("/api/opt/apply_best",{method:"POST"}).then(r=>r.json()).then(d=>{
+    if(d.success){optLog("Applied best params.","ok");loadParams();}
+    else optLog(d.error||"apply failed","err");
+  });
+}
 function optPollStatus(){
   fetch("/api/opt/status").then(r=>r.json()).then(s=>{
     const el=document.getElementById("optStatus");
@@ -949,21 +989,47 @@ function optPollStatus(){
     // Update replay button
     const rbtn=document.getElementById("btnOptReplay");
     if(rbtn){
-      if(s.replaying){ rbtn.dataset.state="replaying"; rbtn.textContent="Stop Replay"; rbtn.style.background="var(--accent)"; }
-      else {
+      if(s.replaying&&!s.optimizing){ rbtn.dataset.state="replaying"; rbtn.textContent="Stop Replay"; rbtn.style.background="var(--accent)"; }
+      else if(!s.replaying){
         if(rbtn.dataset.state==="replaying") optLog("Replay complete.","ok");
         rbtn.dataset.state="idle"; rbtn.textContent="Replay"; rbtn.style.background="var(--blue)";
       }
     }
-    // Build live status line — only overwrite status bar when there's live activity
+    // Update optimization button
+    const obtn=document.getElementById("btnOptRun");
+    if(obtn){
+      if(s.optimizing){ obtn.dataset.state="running"; obtn.textContent="Stop Optimization"; obtn.style.background="var(--accent)"; }
+      else {
+        if(obtn.dataset.state==="running"&&s.opt_message) optLog(s.opt_message,"ok");
+        obtn.dataset.state="idle"; obtn.textContent="Start Optimization"; obtn.style.background="var(--green)";
+      }
+    }
+    // Build live status line
     let live=null;
     if(s.recording){
       live=`<span style="color:var(--highlight)">● REC</span> ${s.rec_elapsed.toFixed(1)}s — joints: ${s.rec_frames.cmd_joint} actual: ${s.rec_frames.actual}`;
+    } else if(s.optimizing){
+      live=`<span style="color:var(--green)">⚙ OPT</span> ${s.opt_message||('Trial '+s.opt_trial+'/'+s.opt_n_trials)}`;
     } else if(s.replaying){
       live=`<span style="color:var(--blue)">▶ REPLAY</span> ${(s.replay_progress*100).toFixed(0)}%`;
     }
     if(live){ el.innerHTML=live; _optLiveState=true; }
-    else { _optLiveState=false; } // allow optLog to write
+    else if(s.opt_message&&!s.optimizing&&s.opt_best_value!==null){
+      // Show final result even when idle
+      el.innerHTML=`<span style="color:var(--green)">${s.opt_message}</span>`;
+      _optLiveState=true; // keep showing until user does something
+    }
+    else { _optLiveState=false; }
+    // Update current/best in opt params table
+    if(s.opt_current_params||s.opt_best_params){
+      for(const key of Object.keys(optSelectedParams)){
+        const p=optSelectedParams[key];
+        const pname=p.param;
+        if(s.opt_current_params&&pname in s.opt_current_params) p.current=s.opt_current_params[pname];
+        if(s.opt_best_params&&pname in s.opt_best_params) p.best=s.opt_best_params[pname];
+      }
+      renderOptParamsTable();
+    }
     // Saved trajectory info
     const info=document.getElementById("optSavedInfo");
     if(s.saved&&s.saved_meta){

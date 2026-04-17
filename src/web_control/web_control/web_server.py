@@ -271,8 +271,8 @@ class WebControlServer:
             msg.joint4, msg.joint5, msg.joint6,
         ], dtype=np.float64)
         self._gripper_raw = float(msg.gripper)
-        # Suppress teleop writes while auto-opt replay is running, but keep the flag intact
-        if self._alicia_teleop and self._ready and not self._opt_mgr.is_replaying:
+        # Suppress teleop writes while auto-opt replay or optimization is running
+        if self._alicia_teleop and self._ready and not self._opt_mgr.is_replaying and not self._opt_mgr.is_optimizing:
             target = self._alicia_joints * self._alicia_scale + self._alicia_offset
             self._set_cmd_target(target)
 
@@ -842,6 +842,39 @@ class WebControlServer:
                 return jsonify({"success": True})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/opt/start", methods=["POST"])
+        def opt_start():
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json() or {}
+            try:
+                self._opt_mgr.start_optimization(data, self._get_param_client)
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @app.route("/api/opt/stop", methods=["POST"])
+        def opt_stop():
+            try:
+                self._opt_mgr.stop_optimization()
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/opt/history")
+        def opt_history():
+            return jsonify({"history": self._opt_mgr.opt_history()})
+
+        @app.route("/api/opt/apply_best", methods=["POST"])
+        def opt_apply_best():
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            try:
+                best = self._opt_mgr.apply_best(self._get_param_client)
+                return jsonify({"success": True, "params": best})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
 
         @app.route("/api/stream")
         def stream():
