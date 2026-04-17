@@ -1,3 +1,204 @@
+# Auto Optimization Framework — Status & Guide
+
+## What's Implemented
+
+Fully working Optuna-based automatic controller parameter optimization integrated into
+`web_control`. Records a reference trajectory via Alicia teleop, replays it with
+Optuna-suggested parameters, measures weighted joint RMSE, and finds optimal parameters.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `src/web_control/web_control/auto_opt.py` | `OptimizationManager` — recording, replay, optimization loop, RMSE, report generation, safety monitoring |
+| `src/web_control/web_control/web_server.py` | Flask routes `/api/opt/*`, wiring to OptimizationManager |
+| `src/web_control/web_control/static/index.html` | Dashboard UI — param checkboxes, opt controls, experiment history |
+
+### Storage
+
+```
+tmp/param_opt/
+  reference_trajectory.npz           # shared trajectory (record once, reuse)
+  exp_2026-04-17_13-07-57/           # one dir per optimization experiment
+    optuna.db                        # Optuna SQLite (TPE sampler state)
+    trial_data/
+      trial_001.npz                  # per-trial: ref+actual trajectories, params, RMSE
+      trial_002.npz
+    opt_summary.json                 # JSON summary of all trials
+    report.html                      # self-contained HTML report with Chart.js
+```
+
+### Control Data Flow
+
+```
+Sources → _set_cmd_target(joints) → _cmd_target_raw → timer 250Hz → publish all
+```
+
+All sources (Alicia teleop, joint sliders, replay, optimization) write to the same
+pipeline. During replay/optimization, teleop writes are suppressed via `is_replaying`
+/ `is_optimizing` checks in `_alicia_cb`.
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/opt/status` | Full state: recording, replay, optimization, safety |
+| POST | `/api/opt/record` | Start recording trajectory |
+| POST | `/api/opt/stop_record` | Stop recording (buffer in memory) |
+| POST | `/api/opt/save` | Save buffer to disk |
+| POST | `/api/opt/delete` | Delete trajectory + clear buffer |
+| POST | `/api/opt/replay` | Start replay (joint mode, 2s align + 0.5s settle) |
+| POST | `/api/opt/stop_replay` | Abort replay |
+| POST | `/api/opt/start` | Start optimization (body: controller, params, n_trials; optional: resume_exp) |
+| POST | `/api/opt/stop` | Stop optimization after current trial |
+| GET | `/api/opt/history` | Trial history for current run |
+| POST | `/api/opt/apply_best` | Apply best found params to controller |
+| GET | `/api/opt/report?name=exp_...` | Serve HTML report for an experiment |
+| GET | `/api/opt/experiments` | List all experiments |
+| DELETE | `/api/opt/experiments/<name>` | Delete an experiment |
+
+### Dashboard UI
+
+- **Controller Parameters panel** — each numeric param has a ☐ checkbox for optimization
+- **Auto Optimization panel** (side-by-side with params):
+  - Start/Stop Recording toggle, Save, Replay toggle, Delete buttons
+  - Status bar: live state (● REC, ⚙ OPT, ▶ REPLAY) or messages
+  - Saved trajectory info
+  - Optimization Parameters table: Ref / Min / Max / Current / Best per selected param
+  - Trials input + Start/Stop Optimization + Apply Best
+  - Experiment History: list with Report / Resume / Delete buttons
+- **Top bar** — robot safety indicator (green "Robot OK" or red "FAULT" with UR dashboard message)
+
+### Safety Monitoring
+
+- Polls `/dashboard_client/get_safety_mode` and `/dashboard_client/get_robot_mode` every 1s
+  (topics from `io_and_status_controller` have 0 publishers when robot faults)
+- `is_robot_ok = (safety_mode == 1 NORMAL) and (robot_mode == 7 RUNNING)`
+- Checks at: objective entry, alignment loop, evaluation loop, settle loop, inter-trial pause
+- On fault: sets `_opt_abort = True`, optimization stops, report generated for completed trials
+
+### Optimization Loop (per trial)
+
+1. Check abort flag + robot safety
+2. Optuna suggests param values via TPE sampler
+3. Set params on controller via `ParametersClient`
+4. Wait 0.3s for params to take effect
+5. **Alignment** (2s): send first frame, clear actual_data
+6. **Evaluation**: replay trajectory at original timing, record `/joint_states`
+7. **Settle** (0.5s): hold last frame
+8. Compute weighted RMSE: `weights = [5,5,5,1,1,1]` (shoulder heavier)
+9. Save trial npz + update history
+10. After all trials: restore ref params, generate report
+
+### Resume
+
+Interrupted experiments (no `report.html`) show a **Resume** button. Resume reuses the
+existing `optuna.db` (warm-starts TPE), counts existing trial files as offset, and runs
+`n_trials - existing` remaining trials.
+
+---
+
+## Known Issues & Bugs Fixed
+
+1. **Trial count showed N+2**: Optuna's global `trial.number` continued from previous runs.
+   Fixed with local `trial_counter`.
+2. **Replay didn't work second time**: Per-trial `/joint_states` subscription
+   create/destroy crashed rclpy. Fixed with persistent subscription.
+3. **Stop optimization hung the web**: `TrialPruned` caused Optuna deadlock.
+   Fixed by returning penalty value + `study.stop()`. All cleanup in `finally` block.
+4. **Report generation failed**: f-string format specifier error with conditional
+   expressions. Fixed by pre-computing values.
+5. **Robot fault not detected**: `io_and_status_controller` is inactive during faults
+   (0 publishers). Fixed by polling dashboard services instead of topics.
+6. **Teleop not restored after replay**: Was force-disabling `_alicia_teleop`.
+   Fixed by checking `is_replaying` in `_alicia_cb` instead.
+
+---
+
+## Joint Impedance Controller — Parameter Analysis
+
+The `joint_impedance_controller` is a CartesianController with all Cartesian task gains = 0,
+making it a **filtered joint-space PD controller**:
+
+$$\tau = K_p \cdot w \cdot (q_{ref} - q) + K_d \cdot w \cdot (\dot{q}_{ref} - \dot{q})$$
+
+### Key Tunable Parameters
+
+| Parameter | Current | Effect | Safe Range |
+|-----------|---------|--------|------------|
+| `nullspace.stiffness` | 200 | Global Kp — tracking stiffness | 100–400 |
+| `nullspace.damping` | 30 | Global Kd — oscillation damping | 10–80 |
+| `nullspace.weights.*` (shoulder) | 5.0 | Per-joint gain scaling (BOTH Kp and Kd) | 0.5–10 |
+| `nullspace.weights.*` (wrist) | 1.0 | Per-joint gain scaling | 0.5–3 |
+| `filter.q` | 0.5 | Joint position EMA smoothing (higher = more lag) | 0.1–0.8 |
+| `filter.dq` | 0.5 | Velocity EMA smoothing | 0.1–0.8 |
+| `filter.output_torque` | 0.5 | Torque output EMA smoothing | 0.1–0.8 |
+| `max_delta_tau` | 3.0 | Torque slew rate limit [Nm/cycle] | 1.0–5.0 |
+| `nullspace.max_tau` | 50.0 | Max torque per joint [Nm] | 20–60 |
+
+### Effective Gains (current)
+
+- Shoulder (weight=5): Kp=1000, Kd=150 → **overdamped** (ζ ≈ 2.4)
+- Wrist (weight=1): Kp=200, Kd=30 → **near critically damped** (ζ ≈ 1.1)
+
+### Parameters update at 500 Hz
+
+The controller calls `refresh_dynamic_parameters()` every cycle. No rate limiting on
+param changes — a `ros2 param set` takes effect within 2ms. The torque rate limiter
+(`max_delta_tau`) prevents dangerous discontinuities.
+
+### Best Candidates for Auto-Optimization
+
+1. **`filter.q`, `filter.dq`, `filter.output_torque`** — safest, directly affect lag/RMSE
+2. **`nullspace.stiffness` + `nullspace.damping`** together — PD gains, must maintain damping ratio
+3. **`nullspace.weights.*`** individually — balance between joints
+
+### DO NOT CHANGE
+
+- `use_gravity_compensation` = false (UR firmware handles it)
+- `use_coriolis_compensation` = false (same)
+- `limit_torques` = true (safety)
+- `stop_commands` = false
+
+---
+
+## Configuration-Dependent Control (Future Work)
+
+The robot's joint inertia matrix M(q) changes with configuration — arm extended has much
+higher inertia at joints 1–3 than arm folded. A single constant gain is suboptimal.
+
+### Approaches
+
+1. **Inertia-shaped gains** — scale by M(q) diagonal: `w_i(q) = M_ii(q) / M_ii(q_ref)`.
+   Set `nullspace.weights` dynamically at 10 Hz. (Hogan 1985, Albu-Schäffer 2003)
+2. **Gain scheduling** — lookup table or neural net mapping q → (Kp, Kd)
+3. **Computed torque** — feedforward M(q)q̈ + C(q,q̇)q̇ + g(q), PD only handles residuals
+4. **Adaptive control** — online inertia estimation (Slotine & Li 1987)
+5. **RL-based** — learn variable impedance (Buchli 2011)
+
+**Recommended first step**: Compute M(q) diagonals via Pinocchio (available in crisp_py),
+normalize to a reference pose, and dynamically scale nullspace weights at 10 Hz.
+Auto-optimize the base weights; inertia scheduling handles pose variation.
+
+---
+
+## Remaining Work
+
+### Short Term
+- [ ] Test fault detection with real protective stops
+- [ ] Test resume after robot recovery
+- [ ] Run full 50-trial optimization on filter params (safest)
+- [ ] Validate report quality with real data
+
+### Medium Term
+- [ ] Inertia-shaped gain scheduling (M(q)-based weight updates at 10 Hz)
+- [ ] Multi-parameter optimization (stiffness + damping + filters simultaneously)
+- [ ] Per-trajectory optimization diversity (record multiple trajectories, evaluate on all)
+
+### Long Term
+- [ ] Learned variable impedance: train a neural net from optimization data
+- [ ] Sim pre-screening with MuJoCo if available
+- [ ] Multi-objective optimization (RMSE vs energy vs smoothness)
 # Auto Optimization Framework — Design Plan (v3)
 
 ## Overview
