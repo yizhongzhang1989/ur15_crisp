@@ -181,8 +181,9 @@
     </div>
   </div>
 
-  <!-- Row 3: Parameters -->
-  <div class="card" style="margin-top:12px;">
+  <!-- Row 3: Parameters + Auto Optimization side-by-side -->
+  <div style="display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:12px; margin-top:12px;">
+  <div class="card" style="min-width:0;">
     <h2>Controller Parameters</h2>
     <div class="step-row" style="margin-bottom:10px;"><label>Controller:</label>
       <select id="paramCtrlSelect" onchange="loadParams()" style="padding:4px 8px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:4px;font-family:monospace;min-width:250px;">
@@ -195,6 +196,24 @@
       <span id="configStatus" style="font-size:0.8em; color:var(--dim);"></span>
     </div>
     <div class="log" id="paramLog"></div>
+  </div>
+
+  <!-- Row 4: Auto Optimization -->
+  <div class="card" style="min-width:0;">
+    <h2>Auto Optimization</h2>
+    <div style="font-size:0.85em;color:var(--dim);margin-bottom:8px;">
+      Enable a controller + teleop / sliders to publish <code>/cmd_target_joint</code> &amp; <code>/cmd_target_pose</code>, then record a reference trajectory. It is stored at <code>tmp/param_opt/reference_trajectory.npz</code>.
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+      <button id="btnOptRec" class="btn-send" onclick="optToggleRecord()" style="background:var(--highlight);">Start Recording</button>
+      <button id="btnOptSave" class="btn-send" onclick="optSave()" style="background:var(--green);">Save</button>
+      <button id="btnOptReplay" class="btn-send" onclick="optToggleReplay()">Replay</button>
+      <button id="btnOptDelete" class="btn-copy" onclick="optDelete()" style="background:var(--highlight);">Delete</button>
+    </div>
+    <div id="optStatus" style="font-family:monospace;font-size:0.9em;margin-bottom:10px;padding:6px 10px;background:var(--bg);border-radius:4px;">Idle.</div>
+    <div id="optSavedInfo" style="font-family:monospace;font-size:0.85em;color:var(--dim);"></div>
+    <div class="log" id="optLog"></div>
+  </div>
   </div>
 </div>
 <script>
@@ -801,7 +820,92 @@ function toggleJointController(mode) {
   }
 }
 
+// === Auto Optimization ===
+function optLog(msg, cls){const l=document.getElementById("optLog");l.innerHTML=`<div class="${cls||''}">${msg}</div>`;}
+function optToggleRecord(){
+  const btn=document.getElementById("btnOptRec");
+  const isRec=btn.dataset.state==="recording";
+  const url=isRec?"/api/opt/stop_record":"/api/opt/record";
+  fetch(url,{method:"POST"}).then(r=>r.json()).then(d=>{
+    if(d.success){
+      optLog(isRec?"Recording stopped \u2014 click Save to persist.":"Recording... click again to stop.","ok");
+    } else optLog(d.error||"failed","err");
+  }).catch(e=>optLog(e,"err"));
+}
+function optSave(){
+  fetch("/api/opt/save",{method:"POST"}).then(r=>r.json()).then(d=>{
+    if(d.success)optLog(`Saved to ${d.path}`,"ok");else optLog(d.error||"save failed","err");
+  });
+}
+function optDelete(){
+  if(!confirm("Delete the saved trajectory and clear in-memory buffer?"))return;
+  fetch("/api/opt/delete",{method:"POST"}).then(r=>r.json()).then(d=>{
+    if(d.success)optLog(d.removed?"Deleted saved trajectory.":"Buffer cleared (no file).","ok");
+    else optLog(d.error||"delete failed","err");
+  });
+}
+function optToggleReplay(){
+  const btn=document.getElementById("btnOptReplay");
+  if(btn.dataset.state==="replaying"){
+    fetch("/api/opt/stop_replay",{method:"POST"}).then(r=>r.json()).then(d=>{
+      if(d.success)optLog("Replay aborted.","ok");else optLog(d.error||"stop failed","err");
+    });
+  } else {
+    fetch("/api/opt/replay",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"joint"})})
+      .then(r=>r.json()).then(d=>{if(d.success)optLog("Replaying...","ok");else optLog(d.error,"err");})
+      .catch(e=>optLog(e,"err"));
+  }
+}
+function optPollStatus(){
+  fetch("/api/opt/status").then(r=>r.json()).then(s=>{
+    const el=document.getElementById("optStatus");
+    const btn=document.getElementById("btnOptRec");
+    if(btn){
+      if(s.recording){
+        btn.dataset.state="recording";
+        btn.textContent="Stop Recording";
+        btn.style.background="var(--accent)";
+      } else {
+        btn.dataset.state="idle";
+        btn.textContent="Start Recording";
+        btn.style.background="var(--highlight)";
+      }
+    }
+    let parts=[];
+    if(s.recording){
+      parts.push(`<span style="color:var(--highlight)">● REC</span> ${s.rec_elapsed.toFixed(1)}s cmd_joint=${s.rec_frames.cmd_joint} cmd_pose=${s.rec_frames.cmd_pose} actual=${s.rec_frames.actual}`);
+    } else if(s.has_buffer){
+      parts.push(`<span style="color:var(--orange)">◆ BUFFER</span> ${s.rec_elapsed.toFixed(2)}s unsaved — cmd_joint=${s.rec_frames.cmd_joint} cmd_pose=${s.rec_frames.cmd_pose}`);
+    }
+    if(s.replaying){
+      parts.push(`<span style="color:var(--blue)">▶ REPLAY</span> ${(s.replay_progress*100).toFixed(1)}%`);
+    }
+    if(parts.length===0)parts.push('<span style="color:var(--dim)">Idle.</span>');
+    el.innerHTML=parts.join(" &nbsp; | &nbsp; ");
+    const rbtn=document.getElementById("btnOptReplay");
+    if(rbtn){
+      if(s.replaying){
+        rbtn.dataset.state="replaying";
+        rbtn.textContent="Stop Replay";
+        rbtn.style.background="var(--accent)";
+      } else {
+        rbtn.dataset.state="idle";
+        rbtn.textContent="Replay";
+        rbtn.style.background="var(--blue)";
+      }
+    }
+    const info=document.getElementById("optSavedInfo");
+    if(s.saved&&s.saved_meta){
+      const m=s.saved_meta;
+      info.innerHTML=`Saved: dur=${(m.duration||0).toFixed(2)}s cmd_joint=${m.n_cmd_joint} cmd_pose=${m.n_cmd_pose} actual=${m.n_actual} — ${m.recorded_at||''}`;
+    } else {
+      info.innerHTML='<span style="color:var(--dim)">No saved trajectory.</span>';
+    }
+  }).catch(()=>{});
+}
+
 startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();initCartControls();drawPlot();checkConfigStatus();
+setInterval(optPollStatus,500);
 </script>
 </body>
 </html>

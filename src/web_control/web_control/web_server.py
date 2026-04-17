@@ -26,6 +26,7 @@ from crisp_py.robot import make_robot
 from crisp_py.control.parameters_client import ParametersClient
 from common.workspace import get_config_path
 from ur15_dashboard.kinematics import fk_quaternion, quaternion_to_rpy
+from web_control.auto_opt import OptimizationManager
 
 try:
     from alicia_duo_leader_driver.msg import ArmJointState
@@ -196,6 +197,14 @@ class WebControlServer:
             0.2, self._gripper_timer_cb, callback_group=ReentrantCallbackGroup()
         )
 
+        # Auto optimization manager (recording + replay, optimization later)
+        self._opt_mgr = OptimizationManager(
+            robot=self.robot,
+            node=self.robot.node,
+            set_cmd_target_fn=self._set_cmd_target,
+            owner=self,
+        )
+
         # Wait for robot in background so Flask can start immediately
         t = threading.Thread(target=self._wait_for_robot, daemon=True)
         t.start()
@@ -262,7 +271,8 @@ class WebControlServer:
             msg.joint4, msg.joint5, msg.joint6,
         ], dtype=np.float64)
         self._gripper_raw = float(msg.gripper)
-        if self._alicia_teleop and self._ready:
+        # Suppress teleop writes while auto-opt replay is running, but keep the flag intact
+        if self._alicia_teleop and self._ready and not self._opt_mgr.is_replaying:
             target = self._alicia_joints * self._alicia_scale + self._alicia_offset
             self._set_cmd_target(target)
 
@@ -594,17 +604,8 @@ class WebControlServer:
 
         @app.route("/api/set_position_joint", methods=["POST"])
         def set_position_joint():
-            """Send joint positions via cmd_target_joint pipeline.
-            Body: {"joints": [q1, ..., q6]}"""
-            if not self._ready:
-                return jsonify({"error": "Robot not ready"}), 503
-            data = request.get_json()
-            try:
-                joints = np.array(data["joints"], dtype=float)
-                self._set_cmd_target(joints)
-                return jsonify({"success": True})
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
+            """Alias for set_target_joint for backward compatibility."""
+            return set_target_joint()
 
         @app.route("/api/move_joint_delta", methods=["POST"])
         def move_joint_delta():
@@ -615,9 +616,9 @@ class WebControlServer:
             try:
                 idx = int(data["index"])
                 delta = float(data["delta"])
-                current = self.robot.joint_values.copy()
+                current = list(self._cmd_target_raw) if self._cmd_target_raw is not None else list(self.robot.joint_values)
                 current[idx] += delta
-                self.robot.set_target_joint(current)
+                self._set_cmd_target(current)
                 return jsonify({"success": True, "joint": self.robot.config.joint_names[idx], "new_value": round(float(current[idx]), 4)})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
@@ -779,6 +780,65 @@ class WebControlServer:
                     self.robot.move_to(pose=target, speed=speed)
 
                 threading.Thread(target=_move, daemon=True).start()
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/opt/status")
+        def opt_status():
+            return jsonify(self._opt_mgr.status())
+
+        @app.route("/api/opt/record", methods=["POST"])
+        def opt_record():
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            try:
+                self._opt_mgr.start_recording()
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @app.route("/api/opt/stop_record", methods=["POST"])
+        def opt_stop_record():
+            try:
+                stopped = self._opt_mgr.stop_recording()
+                return jsonify({"success": True, "stopped": stopped})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/opt/save", methods=["POST"])
+        def opt_save():
+            try:
+                path = self._opt_mgr.save()
+                return jsonify({"success": True, "path": path})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @app.route("/api/opt/delete", methods=["POST"])
+        def opt_delete():
+            try:
+                removed = self._opt_mgr.delete()
+                return jsonify({"success": True, "removed": removed})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @app.route("/api/opt/replay", methods=["POST"])
+        def opt_replay():
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            data = request.get_json() or {}
+            try:
+                alignment = float(data.get("alignment_time_sec", 2.0))
+                settle = float(data.get("settle_time_sec", 0.5))
+                self._opt_mgr.start_replay(alignment, settle)
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @app.route("/api/opt/stop_replay", methods=["POST"])
+        def opt_stop_replay():
+            try:
+                self._opt_mgr.abort_replay()
                 return jsonify({"success": True})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
