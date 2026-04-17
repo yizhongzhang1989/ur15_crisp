@@ -222,7 +222,6 @@
     <div id="optSavedInfo" style="font-family:monospace;font-size:0.85em;color:var(--dim);margin-bottom:8px;"></div>
     <h3 style="font-size:0.85em; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin:8px 0 4px;">Optimization Parameters</h3>
     <div id="optParamsTable" style="max-height:300px;overflow-y:auto;"></div>
-    <div class="log" id="optLog"></div>
   </div>
   </div>
 </div>
@@ -895,20 +894,28 @@ function optRemoveParam(key) {
     if (cb) cb.checked = false;
   }
 }
-function optLog(msg, cls){const l=document.getElementById("optLog");l.innerHTML=`<div class="${cls||''}">${msg}</div>`;}
+// Status bar: single #optStatus element. optLog sets a message; poller overwrites with live state when active.
+let _optLiveState = false; // true when poller is showing live activity (rec/replay)
+function optLog(msg, cls){
+  if(_optLiveState) return; // don't overwrite live state
+  const el=document.getElementById("optStatus");
+  if(cls==="err") el.innerHTML=`<span style="color:var(--highlight)">${msg}</span>`;
+  else if(cls==="ok") el.innerHTML=`<span style="color:var(--green)">${msg}</span>`;
+  else el.innerHTML=msg;
+}
 function optToggleRecord(){
   const btn=document.getElementById("btnOptRec");
   const isRec=btn.dataset.state==="recording";
   const url=isRec?"/api/opt/stop_record":"/api/opt/record";
   fetch(url,{method:"POST"}).then(r=>r.json()).then(d=>{
     if(d.success){
-      optLog(isRec?"Recording stopped \u2014 click Save to persist.":"Recording... click again to stop.","ok");
+      if(isRec) optLog("Recording stopped \u2014 click Save to persist.","ok");
     } else optLog(d.error||"failed","err");
-  }).catch(e=>optLog(e,"err"));
+  }).catch(e=>optLog(String(e),"err"));
 }
 function optSave(){
   fetch("/api/opt/save",{method:"POST"}).then(r=>r.json()).then(d=>{
-    if(d.success)optLog(`Saved to ${d.path}`,"ok");else optLog(d.error||"save failed","err");
+    if(d.success)optLog("Trajectory saved.","ok");else optLog(d.error||"save failed","err");
   });
 }
 function optDelete(){
@@ -922,58 +929,50 @@ function optToggleReplay(){
   const btn=document.getElementById("btnOptReplay");
   if(btn.dataset.state==="replaying"){
     fetch("/api/opt/stop_replay",{method:"POST"}).then(r=>r.json()).then(d=>{
-      if(d.success)optLog("Replay aborted.","ok");else optLog(d.error||"stop failed","err");
+      if(!d.success)optLog(d.error||"stop failed","err");
     });
   } else {
-    fetch("/api/opt/replay",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"joint"})})
-      .then(r=>r.json()).then(d=>{if(d.success)optLog("Replaying...","ok");else optLog(d.error,"err");})
-      .catch(e=>optLog(e,"err"));
+    fetch("/api/opt/replay",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})})
+      .then(r=>r.json()).then(d=>{if(!d.success)optLog(d.error,"err");})
+      .catch(e=>optLog(String(e),"err"));
   }
 }
 function optPollStatus(){
   fetch("/api/opt/status").then(r=>r.json()).then(s=>{
     const el=document.getElementById("optStatus");
+    // Update record button
     const btn=document.getElementById("btnOptRec");
     if(btn){
-      if(s.recording){
-        btn.dataset.state="recording";
-        btn.textContent="Stop Recording";
-        btn.style.background="var(--accent)";
-      } else {
-        btn.dataset.state="idle";
-        btn.textContent="Start Recording";
-        btn.style.background="var(--highlight)";
-      }
+      if(s.recording){ btn.dataset.state="recording"; btn.textContent="Stop Recording"; btn.style.background="var(--accent)"; }
+      else { btn.dataset.state="idle"; btn.textContent="Start Recording"; btn.style.background="var(--highlight)"; }
     }
-    let parts=[];
-    if(s.recording){
-      parts.push(`<span style="color:var(--highlight)">● REC</span> ${s.rec_elapsed.toFixed(1)}s cmd_joint=${s.rec_frames.cmd_joint} cmd_pose=${s.rec_frames.cmd_pose} actual=${s.rec_frames.actual}`);
-    } else if(s.has_buffer){
-      parts.push(`<span style="color:var(--orange)">◆ BUFFER</span> ${s.rec_elapsed.toFixed(2)}s unsaved — cmd_joint=${s.rec_frames.cmd_joint} cmd_pose=${s.rec_frames.cmd_pose}`);
-    }
-    if(s.replaying){
-      parts.push(`<span style="color:var(--blue)">▶ REPLAY</span> ${(s.replay_progress*100).toFixed(1)}%`);
-    }
-    if(parts.length===0)parts.push('<span style="color:var(--dim)">Idle.</span>');
-    el.innerHTML=parts.join(" &nbsp; | &nbsp; ");
+    // Update replay button
     const rbtn=document.getElementById("btnOptReplay");
     if(rbtn){
-      if(s.replaying){
-        rbtn.dataset.state="replaying";
-        rbtn.textContent="Stop Replay";
-        rbtn.style.background="var(--accent)";
-      } else {
-        rbtn.dataset.state="idle";
-        rbtn.textContent="Replay";
-        rbtn.style.background="var(--blue)";
+      if(s.replaying){ rbtn.dataset.state="replaying"; rbtn.textContent="Stop Replay"; rbtn.style.background="var(--accent)"; }
+      else {
+        if(rbtn.dataset.state==="replaying") optLog("Replay complete.","ok");
+        rbtn.dataset.state="idle"; rbtn.textContent="Replay"; rbtn.style.background="var(--blue)";
       }
     }
+    // Build live status line — only overwrite status bar when there's live activity
+    let live=null;
+    if(s.recording){
+      live=`<span style="color:var(--highlight)">● REC</span> ${s.rec_elapsed.toFixed(1)}s — joints: ${s.rec_frames.cmd_joint} actual: ${s.rec_frames.actual}`;
+    } else if(s.replaying){
+      live=`<span style="color:var(--blue)">▶ REPLAY</span> ${(s.replay_progress*100).toFixed(0)}%`;
+    }
+    if(live){ el.innerHTML=live; _optLiveState=true; }
+    else { _optLiveState=false; } // allow optLog to write
+    // Saved trajectory info
     const info=document.getElementById("optSavedInfo");
     if(s.saved&&s.saved_meta){
       const m=s.saved_meta;
-      info.innerHTML=`Saved: dur=${(m.duration||0).toFixed(2)}s cmd_joint=${m.n_cmd_joint} cmd_pose=${m.n_cmd_pose} actual=${m.n_actual} — ${m.recorded_at||''}`;
+      info.innerHTML=`Saved: ${(m.duration||0).toFixed(1)}s, ${m.n_cmd_joint} joint frames, ${m.n_actual} actual frames — ${m.recorded_at||''}`;
+    } else if(s.has_buffer){
+      info.innerHTML=`<span style="color:var(--orange)">Unsaved buffer: ${s.rec_elapsed.toFixed(1)}s, ${s.rec_frames.cmd_joint} frames</span>`;
     } else {
-      info.innerHTML='<span style="color:var(--dim)">No saved trajectory.</span>';
+      info.innerHTML='<span style="color:var(--dim)">No trajectory.</span>';
     }
   }).catch(()=>{});
 }

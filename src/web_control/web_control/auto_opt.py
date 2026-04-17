@@ -56,6 +56,7 @@ class OptimizationManager:
         self._rec_sub_cmd_pose = None
         self._rec_sub_joint_state = None
         self._rec_duration = 0.0   # final duration after stop
+        self._saved_meta_cache = None  # cached saved trajectory metadata
 
         # Replay state
         self._replaying = False
@@ -72,17 +73,23 @@ class OptimizationManager:
             in_memory = len(self._rec_cmd_joint) > 0 and not self._recording
             saved_meta = None
             if saved:
-                try:
-                    with np.load(_traj_path(), allow_pickle=True) as z:
-                        saved_meta = {
-                            "duration": float(z["duration"]),
-                            "n_cmd_joint": int(len(z["cmd_joint_t"])),
-                            "n_cmd_pose": int(len(z["cmd_pose_t"])),
-                            "n_actual": int(len(z["actual_t"])),
-                            "recorded_at": str(z["recorded_at"]) if "recorded_at" in z.files else "",
-                        }
-                except Exception:
-                    saved_meta = {"error": "unreadable"}
+                if self._saved_meta_cache is not None:
+                    saved_meta = self._saved_meta_cache
+                else:
+                    try:
+                        with np.load(_traj_path(), allow_pickle=True) as z:
+                            saved_meta = {
+                                "duration": float(z["duration"]),
+                                "n_cmd_joint": int(len(z["cmd_joint_t"])),
+                                "n_cmd_pose": int(len(z["cmd_pose_t"])),
+                                "n_actual": int(len(z["actual_t"])),
+                                "recorded_at": str(z["recorded_at"]) if "recorded_at" in z.files else "",
+                            }
+                        self._saved_meta_cache = saved_meta
+                    except Exception:
+                        saved_meta = {"error": "unreadable"}
+            else:
+                self._saved_meta_cache = None
             return {
                 "recording": self._recording,
                 "rec_elapsed": round(time.monotonic() - self._rec_start_wall, 2) if self._recording else round(self._rec_duration, 2),
@@ -225,6 +232,7 @@ class OptimizationManager:
             actual_t=actual_t, actual_q=actual_q,
         )
         print(f"[auto_opt] Saved trajectory: {path}")
+        self._saved_meta_cache = None  # invalidate cache
         return path
 
     def delete(self):
@@ -242,6 +250,7 @@ class OptimizationManager:
         if os.path.isfile(path):
             os.remove(path)
             print(f"[auto_opt] Deleted trajectory: {path}")
+            self._saved_meta_cache = None  # invalidate cache
             return True
         return False
 
