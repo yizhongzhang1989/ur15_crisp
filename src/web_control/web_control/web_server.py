@@ -27,6 +27,7 @@ from crisp_py.control.parameters_client import ParametersClient
 from common.workspace import get_config_path
 from ur15_dashboard.kinematics import fk_quaternion, quaternion_to_rpy
 from web_control.auto_opt import OptimizationManager
+from web_control.ur_force_mode import URForceModeStreamer
 
 try:
     from alicia_duo_leader_driver.msg import ArmJointState
@@ -203,6 +204,79 @@ class WebControlServer:
             node=self.robot.node,
             set_cmd_target_fn=self._set_cmd_target,
             owner=self,
+        )
+
+        # UR native force-mode streamer (joystick-style direct wrench control).
+        # We pass hooks so that on disable the controller state is reset
+        # cleanly around the resend of the External Control program. Without
+        # this, the scaled_joint_trajectory_controller retains its last
+        # latched target from before force_mode was enabled and drives the
+        # robot back to that pose as soon as URCap reconnects.
+        #
+        # The JTC-reset strategy:
+        #   BEFORE resend: deactivate the active joint trajectory controller
+        #                  (so there is no command source when URCap comes
+        #                  back), and snap _cmd_target_raw to current joints
+        #                  so CRISP doesn't immediately re-publish a stale
+        #                  target either.
+        #   AFTER  resend: reactivate the joint trajectory controller.
+        #                  ros2_control reads the current hardware position
+        #                  on reactivation, so the controller's hold-point
+        #                  becomes the CURRENT pose instead of the stale one.
+        self._jtc_deactivated_by_ur_force: list = []
+
+        def _sync_before_resend():
+            # 1. Snap CRISP/raw target to current actual joints.
+            try:
+                joints = self.robot.joint_values
+                if joints is not None:
+                    self._cmd_target_raw = [float(j) for j in joints]
+                    self._fwd_pos_prev = np.array(joints, dtype=float)
+                    self._fwd_pos_vel = np.zeros(6)
+                    self._fwd_pos_time = time.monotonic()
+            except Exception:
+                pass
+            # 2. Deactivate the joint trajectory controller that holds a
+            #    stale target. Remember which ones we deactivated so we
+            #    reactivate exactly those afterwards.
+            self._jtc_deactivated_by_ur_force = []
+            try:
+                controllers = self.robot.controller_switcher_client.get_controller_list()
+                # Match any active *trajectory_controller* on the joint
+                # command interface (covers both scaled_joint_trajectory_controller
+                # and joint_trajectory_controller).
+                to_deactivate = [
+                    c.name for c in controllers
+                    if c.state == "active" and "trajectory_controller" in c.name
+                ]
+                if to_deactivate:
+                    self.robot.controller_switcher_client._switch_controller(
+                        to_deactivate, []
+                    )
+                    self._jtc_deactivated_by_ur_force = to_deactivate
+            except Exception as e:
+                print(f"[ur_force] failed to deactivate JTC: {e}")
+
+        def _restore_after_resend():
+            # Reactivate whatever we deactivated. ros2_control will read the
+            # current hardware position on reactivation, so the controller's
+            # hold-point becomes the current pose (no snap-back).
+            if not self._jtc_deactivated_by_ur_force:
+                return
+            try:
+                self.robot.controller_switcher_client._switch_controller(
+                    [], list(self._jtc_deactivated_by_ur_force)
+                )
+            except Exception as e:
+                print(f"[ur_force] failed to reactivate JTC: {e}")
+            finally:
+                self._jtc_deactivated_by_ur_force = []
+
+        self._ur_force = URForceModeStreamer(
+            self.robot.node,
+            robot_ip="192.168.1.15",
+            on_before_resend=_sync_before_resend,
+            on_after_resend=_restore_after_resend,
         )
 
         # Wait for robot in background so Flask can start immediately
@@ -906,6 +980,70 @@ class WebControlServer:
             except (FileNotFoundError, ValueError) as e:
                 return jsonify({"error": str(e)}), 400
 
+        # ---------- UR Native Force Mode (joystick-style wrench control) ----------
+        @app.route("/api/ur_force/status")
+        def ur_force_status():
+            return jsonify(self._ur_force.status())
+
+        @app.route("/api/ur_force/enable", methods=["POST"])
+        def ur_force_enable():
+            if not self._ready:
+                return jsonify({"error": "Robot not ready"}), 503
+            result = self._ur_force.enable()
+            if not result.get("success"):
+                return jsonify(result), 500
+            return jsonify(result)
+
+        @app.route("/api/ur_force/disable", methods=["POST"])
+        def ur_force_disable():
+            result = self._ur_force.disable()
+            return jsonify(result)
+
+        @app.route("/api/ur_force/wrench", methods=["POST"])
+        def ur_force_wrench():
+            if not self._ur_force.enabled:
+                return jsonify({"error": "Force mode not enabled"}), 409
+            data = request.get_json() or {}
+            try:
+                clamped = self._ur_force.set_wrench(
+                    float(data.get("fx", 0.0)),
+                    float(data.get("fy", 0.0)),
+                    float(data.get("fz", 0.0)),
+                    float(data.get("tx", 0.0)),
+                    float(data.get("ty", 0.0)),
+                    float(data.get("tz", 0.0)),
+                )
+                return jsonify({"success": True, "wrench": clamped})
+            except (TypeError, ValueError) as e:
+                return jsonify({"error": f"invalid input: {e}"}), 400
+
+        @app.route("/api/ur_force/params", methods=["POST"])
+        def ur_force_set_params():
+            """Update tunable force-mode parameters at runtime.
+
+            JSON body accepts any subset of:
+              damping, gain_scaling, speed_limit_m_s, speed_limit_rad_s,
+              max_force_n, max_torque_nm
+            """
+            data = request.get_json() or {}
+            try:
+                def _f(k):
+                    v = data.get(k)
+                    return float(v) if v is not None else None
+                updated = self._ur_force.set_params(
+                    damping=_f("damping"),
+                    gain_scaling=_f("gain_scaling"),
+                    speed_limit_m_s=_f("speed_limit_m_s"),
+                    speed_limit_rad_s=_f("speed_limit_rad_s"),
+                    max_force_n=_f("max_force_n"),
+                    max_torque_nm=_f("max_torque_nm"),
+                    payload_kg=_f("payload_kg"),
+                    payload_cog_z=_f("payload_cog_z"),
+                )
+                return jsonify({"success": True, "params": updated})
+            except (TypeError, ValueError) as e:
+                return jsonify({"error": f"invalid input: {e}"}), 400
+
         @app.route("/api/stream")
         def stream():
             """Server-Sent Events stream of robot status at ~10 Hz."""
@@ -949,6 +1087,7 @@ class WebControlServer:
                             "alicia_teleop": self._alicia_teleop,
                             "gripper_raw": round(float(self._gripper_raw), 1) if self._gripper_raw is not None else None,
                             "gripper_level": self._gripper_level,
+                            "ur_force": self._ur_force.status(),
                         }
                         # Drain plot buffer and attach batch
                         with self._plot_lock:
