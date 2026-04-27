@@ -35,7 +35,7 @@ try:
 except ImportError:
     _HAS_ALICIA = False
 
-_CRISP_CONTROLLERS = ["gravity_compensation", "cartesian_impedance_controller", "joint_impedance_controller"]
+_CRISP_CONTROLLERS = ["gravity_compensation", "cartesian_impedance_controller", "joint_impedance_controller", "my_joint_impedance_controller"]
 
 
 def _find_workspace_config():
@@ -570,6 +570,11 @@ class WebControlServer:
                 values = client.get_parameters(names)
                 params = {}
                 for name, val in zip(names, values):
+                    # Convert numpy/array.array/tuples to plain lists for JSON.
+                    if isinstance(val, (tuple,)):
+                        val = list(val)
+                    elif hasattr(val, "tolist") and not isinstance(val, str):
+                        val = val.tolist()
                     params[name] = val
                 return jsonify({"controller": controller_name, "params": params})
             except Exception as e:
@@ -594,6 +599,12 @@ class WebControlServer:
                 for (k, new_val), cur_val in zip(params_to_set.items(), current_values):
                     if isinstance(cur_val, float) and isinstance(new_val, int):
                         new_val = float(new_val)
+                    elif isinstance(cur_val, (list, tuple)) and isinstance(new_val, list):
+                        # Preserve element type (double[] vs int[]) to satisfy ROS 2 typing.
+                        if len(cur_val) > 0 and isinstance(cur_val[0], float):
+                            new_val = [float(x) for x in new_val]
+                        elif len(cur_val) > 0 and isinstance(cur_val[0], int) and not isinstance(cur_val[0], bool):
+                            new_val = [int(x) for x in new_val]
                     param_tuples.append((k, new_val))
                 client.set_parameters(param_tuples)
                 return jsonify({"success": True, "set": current_names})

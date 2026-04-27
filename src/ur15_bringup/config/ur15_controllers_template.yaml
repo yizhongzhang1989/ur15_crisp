@@ -49,7 +49,7 @@
 
       # --- Custom controllers ---
       my_joint_impedance_controller:
-        type: my_joint_impedance_controller/MyJointImpedanceController
+        type: joint_impedance_controller/JointImpedanceController
 
       enforce_command_limits: false
 
