@@ -9,6 +9,7 @@
 
   <depend>ur_robot_driver</depend>
   <depend>crisp_controllers</depend>
+  <depend>my_joint_impedance_controller</depend>
   <exec_depend>common</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

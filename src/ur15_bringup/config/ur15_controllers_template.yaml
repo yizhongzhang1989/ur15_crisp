@@ -47,6 +47,10 @@
       joint_impedance_controller:
         type: crisp_controllers/CartesianController
 
+      # --- Custom controllers ---
+      my_joint_impedance_controller:
+        type: my_joint_impedance_controller/MyJointImpedanceController
+
       enforce_command_limits: false
 
 # ============================================================
@@ -337,3 +341,34 @@ joint_impedance_controller:
     use_local_jacobian: true
     limit_error: true
     limit_torques: true
+
+# ============================================================
+# my_joint_impedance_controller — simplified PD impedance
+# Activated from the dashboard. Listens on the same /target_joint topic
+# as CRISP's joint_impedance_controller, so the existing dashboard
+# joint sliders work without changes.
+#
+# tau = K (q_d - q) + D (qdot_d - qdot)
+# Negative d entries auto-fill to 2*sqrt(k) (critical damping).
+# ============================================================
+my_joint_impedance_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    # Per-joint stiffness (N*m/rad). Tuned on real UR15 to overcome joint
+    # friction with effort interface (~150 N*m/rad on wrist needed for motion).
+    k:        [300.0, 300.0, 300.0, 150.0, 150.0, 150.0]
+    # Negative -> auto critical damping (2*sqrt(k)) at activation.
+    d:        [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    # Absolute torque clamp per joint (N*m). UR15 datasheet: 330/330/150/56/56/56.
+    # Start well below hardware limits for safety.
+    tau_max:  [100.0, 100.0, 100.0, 50.0, 50.0, 50.0]
+    # Per-cycle torque rate limit (N*m). 500 Hz update -> 3.0 -> 1500 N*m/s.
+    max_delta_tau: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+    command_topic: "/target_joint"
+    diagnostics_topic: "~/tau_d"
