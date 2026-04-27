@@ -161,6 +161,7 @@
     <div class="tab-bar">
       <button class="tab-btn active" onclick="switchTab('cartesian')">Cartesian Control</button>
       <button class="tab-btn" onclick="switchTab('joint')">Joint Control</button>
+      <button class="tab-btn" onclick="switchTab('urforce')">Native Force Mode</button>
     </div>
     <div class="card" style="border-radius:0 6px 6px 6px;">
       <div id="tab-cartesian" class="tab-content active">
@@ -185,6 +186,43 @@
           <button id="btnJointSend" class="btn-send" onclick="toggleJointSending()" style="padding:8px 20px;">Start Sending</button>
         </div>
         <div class="log" id="jointLog"></div>
+      </div>
+      <div id="tab-urforce" class="tab-content">
+        <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center; flex-wrap:wrap;">
+          <button id="btnUrForceEnable" class="btn-send" onclick="toggleUrForce()" style="padding:8px 20px; background:var(--accent);">Enable Native Force Mode</button>
+          <span id="urForceState" style="font-family:monospace;font-size:0.9em;color:var(--dim);">Disabled</span>
+        </div>
+        <div style="font-size:0.82em;color:var(--dim);margin-bottom:8px;">
+          Streams a wrench directly to UR's native <code>force_mode()</code>.
+          Drag a slider to apply force/torque; release to spring back to zero.
+          Enabling preempts External Control; disabling resends it automatically.
+          <b>Safety limits are clamped server-side.</b>
+        </div>
+        <details style="margin-bottom:10px;border:1px solid var(--accent);border-radius:4px;padding:6px 10px;" open>
+          <summary style="cursor:pointer;font-weight:bold;font-size:0.9em;">Tuning Parameters</summary>
+          <div style="font-size:0.78em;color:var(--dim);margin:6px 0;">
+            Changes apply live (no re-enable needed).
+            <b>Damping</b>: virtual friction (0=free, 1=sticky; lower = faster motion).
+            <b>Gain scaling</b>: responsiveness (0..2; higher = faster, more aggressive).
+            <b>Speed limits</b>: hard cap on TCP speed while force_mode is active.
+            <b>Slider range</b>: adjusts the max of the wrench sliders below.
+            <b>* Payload / CoG Z</b>: sets <code>set_target_payload</code> at URScript
+            startup to fix up/down asymmetry — <b>requires re-enable to take effect</b>.
+            Set <code>Payload</code> to the actual mass hanging from the flange
+            (gripper + tool + part) in kg; <code>CoG Z</code> is how far below the
+            flange the centre of mass sits. Set Payload to 0 to keep the URCap/Installation
+            default.
+          </div>
+          <div id="urfParams" style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center;font-size:0.85em;font-family:monospace;"></div>
+          <div style="margin-top:6px;">
+            <button class="btn-copy" onclick="resetUrfParams()" style="font-size:0.8em;padding:4px 10px;">Reset Defaults</button>
+          </div>
+        </details>
+        <div id="urForceSliders"></div>
+        <div class="btn-row" style="margin-top:8px;">
+          <button class="btn-copy" onclick="zeroUrForce()">Zero All</button>
+        </div>
+        <div class="log" id="urForceLog"></div>
       </div>
     </div>
   </div>
@@ -238,7 +276,7 @@
 const JN=["shoulder_pan","shoulder_lift","elbow","wrist_1","wrist_2","wrist_3"];
 let latestPose=null, latestJoints=null;
 let availableControllers=[];  // all known controller names (active + inactive)
-function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.cmd_target_raw||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}if(d.alicia_teleop){document.getElementById("teleopStatus").textContent="ACTIVE";document.getElementById("teleopStatus").style.color="var(--green)";}else{document.getElementById("teleopStatus").textContent="Inactive";document.getElementById("teleopStatus").style.color="var(--dim)";}if(d.gripper_raw!==null&&d.gripper_raw!==undefined){document.getElementById("teleopGripperRaw").textContent=d.gripper_raw.toFixed(0);}if(d.gripper_level!==null&&d.gripper_level!==undefined){document.getElementById("teleopGripperLevel").textContent=d.gripper_level;document.getElementById("teleopGripperPos").textContent=Math.round(d.gripper_level*255/24);}if(d.alicia_joints&&d.alicia_joints.length){document.getElementById("teleopJoints").textContent=d.alicia_joints.map(v=>(v*180/Math.PI).toFixed(1)+'\u00b0').join(', ');}if(d.cmd_target_pose){const tp=d.cmd_target_pose;document.getElementById("teleopTcpPos").textContent=`(${tp.x}, ${tp.y}, ${tp.z}) m`;document.getElementById("teleopTcpQuat").textContent=`(${tp.qx}, ${tp.qy}, ${tp.qz}, ${tp.qw})`;document.getElementById("teleopTcpRpy").textContent=`(${tp.roll}, ${tp.pitch}, ${tp.yaw}) deg`;}pushPlotData(d);updateJointSlidersCurrent();updateCartSlidersCurrent();};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
+function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.cmd_target_raw||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}if(d.alicia_teleop){document.getElementById("teleopStatus").textContent="ACTIVE";document.getElementById("teleopStatus").style.color="var(--green)";}else{document.getElementById("teleopStatus").textContent="Inactive";document.getElementById("teleopStatus").style.color="var(--dim)";}if(d.gripper_raw!==null&&d.gripper_raw!==undefined){document.getElementById("teleopGripperRaw").textContent=d.gripper_raw.toFixed(0);}if(d.gripper_level!==null&&d.gripper_level!==undefined){document.getElementById("teleopGripperLevel").textContent=d.gripper_level;document.getElementById("teleopGripperPos").textContent=Math.round(d.gripper_level*255/24);}if(d.alicia_joints&&d.alicia_joints.length){document.getElementById("teleopJoints").textContent=d.alicia_joints.map(v=>(v*180/Math.PI).toFixed(1)+'\u00b0').join(', ');}if(d.cmd_target_pose){const tp=d.cmd_target_pose;document.getElementById("teleopTcpPos").textContent=`(${tp.x}, ${tp.y}, ${tp.z}) m`;document.getElementById("teleopTcpQuat").textContent=`(${tp.qx}, ${tp.qy}, ${tp.qz}, ${tp.qw})`;document.getElementById("teleopTcpRpy").textContent=`(${tp.roll}, ${tp.pitch}, ${tp.yaw}) deg`;}pushPlotData(d);updateJointSlidersCurrent();updateCartSlidersCurrent();updateUrForceFromStream(d.ur_force);};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
 function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;availableControllers=d.controllers.map(c=>c.name);const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");const jic=d.controllers.find(c=>c.name==="joint_impedance_controller");jointControllerActive=jic&&jic.state==="active";const jtc=d.controllers.find(c=>c.name==="forward_position_controller");jointTrajControllerActive=jtc&&jtc.state==="active";if(jointControllerActive)jointControlMode='impedance';else if(jointTrajControllerActive)jointControlMode='trajectory';else jointControlMode=null;const cic=d.controllers.find(c=>c.name==="cartesian_impedance_controller");cartControllerActive=cic&&cic.state==="active";updateJointCtrlBtns();updateCartCtrlBtn();
 // Populate param controller dropdown dynamically
 const sel=document.getElementById("paramCtrlSelect");const curVal=sel.value;sel.innerHTML='<option value="">-- select --</option>';d.controllers.filter(c=>!c.name.includes("broadcaster")&&c.name!=="joint_state_broadcaster").sort((a,b)=>a.name.localeCompare(b.name)).forEach(c=>{const o=document.createElement("option");o.value=c.name;o.textContent=c.name;sel.appendChild(o);});sel.value=curVal;
@@ -776,6 +814,207 @@ function savePosParamsToDisk() {
   }).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});
 }
 
+// --- UR Native Force Mode ---
+let urForceEnabled = false;
+const URF_AXES = [
+  {key:'fx', label:'Fx', unit:'N',   max:20, color:'var(--highlight)'},
+  {key:'fy', label:'Fy', unit:'N',   max:20, color:'var(--highlight)'},
+  {key:'fz', label:'Fz', unit:'N',   max:20, color:'var(--highlight)'},
+  {key:'tx', label:'Tx', unit:'Nm',  max:2,  color:'var(--orange)'},
+  {key:'ty', label:'Ty', unit:'Nm',  max:2,  color:'var(--orange)'},
+  {key:'tz', label:'Tz', unit:'Nm',  max:2,  color:'var(--orange)'},
+];
+const urfValues = {fx:0, fy:0, fz:0, tx:0, ty:0, tz:0};
+let urfSendTimer = null;
+
+// Tunable params. `max_force_n` / `max_torque_nm` also drive slider ranges.
+const URF_PARAM_DEFS = [
+  {key:'damping',           label:'Damping',       min:0.0,  max:1.0,  step:0.01, dflt:0.5,  fmt:v=>v.toFixed(2)},
+  {key:'gain_scaling',      label:'Gain scaling',  min:0.0,  max:2.0,  step:0.05, dflt:0.5,  fmt:v=>v.toFixed(2)},
+  {key:'speed_limit_m_s',   label:'Speed limit',   min:0.01, max:0.5,  step:0.01, dflt:0.1,  fmt:v=>v.toFixed(2)+' m/s'},
+  {key:'speed_limit_rad_s', label:'Rot speed lim', min:0.05, max:2.0,  step:0.05, dflt:0.5,  fmt:v=>v.toFixed(2)+' rad/s'},
+  {key:'max_force_n',       label:'Slider max F',  min:1,    max:30,   step:1,    dflt:20,   fmt:v=>v.toFixed(0)+' N'},
+  {key:'max_torque_nm',     label:'Slider max T',  min:0.1,  max:3.0,  step:0.1,  dflt:2.0,  fmt:v=>v.toFixed(1)+' Nm'},
+  {key:'payload_kg',        label:'Payload *',     min:0.0,  max:10.0, step:0.05, dflt:0.0,  fmt:v=>v.toFixed(2)+' kg'},
+  {key:'payload_cog_z',     label:'CoG Z *',       min:0.0,  max:0.3,  step:0.005, dflt:0.08, fmt:v=>(v*1000).toFixed(0)+' mm'},
+];
+const urfParams = {};
+let urfParamTimer = null;
+
+function initUrfParams() {
+  const c = document.getElementById('urfParams');
+  if (!c || c.dataset.inited) return;
+  c.dataset.inited = '1';
+  c.innerHTML = URF_PARAM_DEFS.map(p => `
+    <label for="urfp_${p.key}">${p.label}</label>
+    <input type="range" id="urfp_${p.key}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.dflt}"
+           oninput="onUrfParamInput('${p.key}')">
+    <span id="urfpVal_${p.key}" style="min-width:80px;text-align:right;">${p.fmt(p.dflt)}</span>
+  `).join('');
+  URF_PARAM_DEFS.forEach(p => { urfParams[p.key] = p.dflt; });
+}
+
+function onUrfParamInput(key) {
+  const def = URF_PARAM_DEFS.find(p => p.key === key);
+  const v = parseFloat(document.getElementById('urfp_' + key).value);
+  urfParams[key] = v;
+  document.getElementById('urfpVal_' + key).textContent = def.fmt(v);
+  // If slider range changed, rebuild the wrench sliders.
+  if (key === 'max_force_n' || key === 'max_torque_nm') {
+    URF_AXES[0].max = URF_AXES[1].max = URF_AXES[2].max = urfParams.max_force_n;
+    URF_AXES[3].max = URF_AXES[4].max = URF_AXES[5].max = urfParams.max_torque_nm;
+    URF_AXES.forEach(a => {
+      const s = document.getElementById('urf_' + a.key);
+      if (s) { s.min = -a.max; s.max = a.max; }
+    });
+  }
+  // Throttle to avoid hammering the server (~10 Hz).
+  if (urfParamTimer) return;
+  urfParamTimer = setTimeout(() => {
+    urfParamTimer = null;
+    fetch('/api/ur_force/params', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(urfParams)
+    }).catch(() => {});
+  }, 100);
+}
+
+function resetUrfParams() {
+  URF_PARAM_DEFS.forEach(p => {
+    const el = document.getElementById('urfp_' + p.key);
+    if (el) el.value = p.dflt;
+    urfParams[p.key] = p.dflt;
+    const vEl = document.getElementById('urfpVal_' + p.key);
+    if (vEl) vEl.textContent = p.fmt(p.dflt);
+  });
+  URF_AXES[0].max = URF_AXES[1].max = URF_AXES[2].max = urfParams.max_force_n;
+  URF_AXES[3].max = URF_AXES[4].max = URF_AXES[5].max = urfParams.max_torque_nm;
+  URF_AXES.forEach(a => {
+    const s = document.getElementById('urf_' + a.key);
+    if (s) { s.min = -a.max; s.max = a.max; }
+  });
+  fetch('/api/ur_force/params', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(urfParams)
+  }).catch(() => {});
+}
+
+function initUrForceSliders() {
+  const c = document.getElementById('urForceSliders');
+  if (!c || c.dataset.inited) return;
+  c.dataset.inited = '1';
+  c.innerHTML = URF_AXES.map(a => `
+    <div class="joint-slider-row">
+      <div class="joint-slider-name" style="color:${a.color}">${a.label} (${a.unit})</div>
+      <div class="joint-slider-vals">
+        <div class="joint-slider-line">
+          <label style="color:${a.color}">Cmd:</label>
+          <input type="range" id="urf_${a.key}" min="${-a.max}" max="${a.max}" step="0.1" value="0"
+                 oninput="onUrfSliderInput('${a.key}')"
+                 onmouseup="onUrfSliderRelease('${a.key}')"
+                 ontouchend="onUrfSliderRelease('${a.key}')"
+                 onmouseleave="onUrfSliderRelease('${a.key}')">
+          <span class="val" id="urfVal_${a.key}" style="color:${a.color}">0.00 ${a.unit}</span>
+        </div>
+      </div>
+      <div class="joint-slider-diff" id="urfMeas_${a.key}" style="color:var(--dim)">—</div>
+    </div>
+  `).join('');
+}
+
+function onUrfSliderInput(key) {
+  const v = parseFloat(document.getElementById('urf_' + key).value) || 0;
+  urfValues[key] = v;
+  const ax = URF_AXES.find(a => a.key === key);
+  document.getElementById('urfVal_' + key).textContent = v.toFixed(2) + ' ' + ax.unit;
+  sendUrfWrench();
+}
+
+function onUrfSliderRelease(key) {
+  // Spring-back to zero
+  document.getElementById('urf_' + key).value = 0;
+  urfValues[key] = 0;
+  const ax = URF_AXES.find(a => a.key === key);
+  document.getElementById('urfVal_' + key).textContent = '0.00 ' + ax.unit;
+  sendUrfWrench();
+}
+
+function zeroUrForce() {
+  URF_AXES.forEach(a => {
+    document.getElementById('urf_' + a.key).value = 0;
+    urfValues[a.key] = 0;
+    document.getElementById('urfVal_' + a.key).textContent = '0.00 ' + a.unit;
+  });
+  sendUrfWrench();
+}
+
+function sendUrfWrench() {
+  if (!urForceEnabled) return;
+  // Throttle to avoid flooding the server (~50 Hz max).
+  if (urfSendTimer) return;
+  urfSendTimer = setTimeout(() => {
+    urfSendTimer = null;
+    fetch('/api/ur_force/wrench', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(urfValues)
+    }).catch(() => {});
+  }, 20);
+}
+
+function toggleUrForce() {
+  const btn = document.getElementById('btnUrForceEnable');
+  const log = document.getElementById('urForceLog');
+  if (urForceEnabled) {
+    log.innerHTML = '<div>Disabling native force mode...</div>';
+    zeroUrForce();
+    fetch('/api/ur_force/disable', {method:'POST'}).then(r=>r.json()).then(d=>{
+      urForceEnabled = false;
+      btn.textContent = 'Enable Native Force Mode';
+      btn.style.background = 'var(--accent)';
+      document.getElementById('urForceState').textContent = 'Disabled';
+      log.innerHTML = '<div class="ok">Disabled; External Control resumed.</div>';
+    }).catch(e=>{log.innerHTML=`<div class="err">${e}</div>`;});
+  } else {
+    log.innerHTML = '<div>Enabling native force mode...</div>';
+    fetch('/api/ur_force/enable', {method:'POST'}).then(r=>r.json()).then(d=>{
+      if (d.success) {
+        urForceEnabled = true;
+        btn.textContent = 'Disable Native Force Mode';
+        btn.style.background = 'var(--green)';
+        document.getElementById('urForceState').textContent =
+          `Enabled · host ${d.host_ip || '?'}:${d.port || '?'} · robot ${d.robot_addr || '?'}`;
+        log.innerHTML = '<div class="ok">Enabled. Drag sliders to apply wrench.</div>';
+      } else {
+        log.innerHTML = `<div class="err">${d.error || 'Failed to enable'}</div>`;
+      }
+    }).catch(e=>{log.innerHTML=`<div class="err">${e}</div>`;});
+  }
+}
+
+function updateUrForceFromStream(s) {
+  if (!s) return;
+  // Update sliders' measured values from streamed status (server-clamped).
+  if (s.wrench && s.wrench.length === 6) {
+    URF_AXES.forEach((a, i) => {
+      const el = document.getElementById('urfMeas_' + a.key);
+      if (el) el.textContent = s.wrench[i].toFixed(2) + ' ' + a.unit;
+    });
+  }
+  // Keep button state in sync with backend.
+  if (typeof s.enabled === 'boolean' && s.enabled !== urForceEnabled) {
+    urForceEnabled = s.enabled;
+    const btn = document.getElementById('btnUrForceEnable');
+    if (btn) {
+      btn.textContent = urForceEnabled ? 'Disable Native Force Mode' : 'Enable Native Force Mode';
+      btn.style.background = urForceEnabled ? 'var(--green)' : 'var(--accent)';
+    }
+    const stateEl = document.getElementById('urForceState');
+    if (stateEl) stateEl.textContent = urForceEnabled ? 'Enabled' : 'Disabled';
+  }
+}
+
 // --- Tab Switching ---
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1101,7 +1340,7 @@ function optPollStatus(){
   }).catch(()=>{});
 }
 
-startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();initCartControls();drawPlot();checkConfigStatus();
+startStream();refreshControllers();setInterval(refreshControllers,5000);initJointControls();initCartControls();initUrfParams();initUrForceSliders();drawPlot();checkConfigStatus();
 setInterval(optPollStatus,500);renderOptParamsTable();optRefreshExperiments();
 </script>
 </body>
