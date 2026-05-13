@@ -13,3 +13,6 @@
 	path = src/alicia_leader
 	url = https://github.com/yizhongzhang1989/Alicia-D-Leader-ROS.git
 	shallow = true
+[submodule "src/joint_impedance_controller"]
+	path = src/joint_impedance_controller
+	url = https://github.com/yizhongzhang1989/joint_impedance_controller.git

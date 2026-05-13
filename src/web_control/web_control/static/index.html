@@ -176,8 +176,9 @@
         <div class="log" id="cartLog"></div>
       </div>
       <div id="tab-joint" class="tab-content">
-        <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center;">
+        <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center; flex-wrap:wrap;">
           <button id="btnJointCtrl" class="btn-send" onclick="toggleJointController('impedance')" style="padding:8px 20px;">Enable Joint Impedance Controller</button>
+          <button id="btnMyJointCtrl" class="btn-send" onclick="toggleJointController('my_impedance')" style="padding:8px 20px;">Enable My Joint Impedance Controller</button>
           <button id="btnJointTrajCtrl" class="btn-send" onclick="toggleJointController('trajectory')" style="padding:8px 20px;">Enable Joint Position Controller</button>
         </div>
         <div id="jointSliderContainer"></div>
@@ -277,7 +278,7 @@ const JN=["shoulder_pan","shoulder_lift","elbow","wrist_1","wrist_2","wrist_3"];
 let latestPose=null, latestJoints=null;
 let availableControllers=[];  // all known controller names (active + inactive)
 function startStream(){const e=new EventSource("/api/stream");e.onmessage=t=>{const d=JSON.parse(t.data),dot=document.getElementById("connDot"),txt=document.getElementById("connText");if(!d.ready){dot.className="status-dot wait";txt.textContent="Waiting...";return;}dot.className="status-dot ok";txt.textContent="Connected";latestPose=d.pose;latestJoints=d.joints;document.getElementById("px").textContent=d.pose.x;document.getElementById("py").textContent=d.pose.y;document.getElementById("pz").textContent=d.pose.z;document.getElementById("qx").textContent=d.pose.qx;document.getElementById("qy").textContent=d.pose.qy;document.getElementById("qz").textContent=d.pose.qz;document.getElementById("qw").textContent=d.pose.qw;const v=d.velocity||[],ef=d.effort||[],cm=d.cmd_torques||[],tg=d.cmd_target_raw||[];document.getElementById("jointDisplay").innerHTML=d.joints.map((q,i)=>`<tr><td style="color:var(--dim)">${JN[i]}</td><td>${(q*180/Math.PI).toFixed(1)}&deg;</td><td class="jtgt">${tg[i]!==undefined?(tg[i]*180/Math.PI).toFixed(1)+'\u00b0':'\u2014'}</td><td class="jvel">${v[i]!==undefined?v[i].toFixed(3):'\u2014'}</td><td class="jeff">${ef[i]!==undefined?ef[i].toFixed(2):'\u2014'} A</td><td class="jcmd">${cm[i]!==undefined?cm[i].toFixed(2):'\u2014'} Nm</td></tr>`).join("");if(d.ft){document.getElementById("fx").textContent=d.ft.force.x;document.getElementById("fy").textContent=d.ft.force.y;document.getElementById("fz").textContent=d.ft.force.z;document.getElementById("ftx").textContent=d.ft.torque.x;document.getElementById("fty").textContent=d.ft.torque.y;document.getElementById("ftz").textContent=d.ft.torque.z;document.getElementById("ftMag").textContent=d.ft.force_mag;}if(d.alicia_teleop){document.getElementById("teleopStatus").textContent="ACTIVE";document.getElementById("teleopStatus").style.color="var(--green)";}else{document.getElementById("teleopStatus").textContent="Inactive";document.getElementById("teleopStatus").style.color="var(--dim)";}if(d.gripper_raw!==null&&d.gripper_raw!==undefined){document.getElementById("teleopGripperRaw").textContent=d.gripper_raw.toFixed(0);}if(d.gripper_level!==null&&d.gripper_level!==undefined){document.getElementById("teleopGripperLevel").textContent=d.gripper_level;document.getElementById("teleopGripperPos").textContent=Math.round(d.gripper_level*255/24);}if(d.alicia_joints&&d.alicia_joints.length){document.getElementById("teleopJoints").textContent=d.alicia_joints.map(v=>(v*180/Math.PI).toFixed(1)+'\u00b0').join(', ');}if(d.cmd_target_pose){const tp=d.cmd_target_pose;document.getElementById("teleopTcpPos").textContent=`(${tp.x}, ${tp.y}, ${tp.z}) m`;document.getElementById("teleopTcpQuat").textContent=`(${tp.qx}, ${tp.qy}, ${tp.qz}, ${tp.qw})`;document.getElementById("teleopTcpRpy").textContent=`(${tp.roll}, ${tp.pitch}, ${tp.yaw}) deg`;}pushPlotData(d);updateJointSlidersCurrent();updateCartSlidersCurrent();updateUrForceFromStream(d.ur_force);};e.onerror=()=>{document.getElementById("connDot").className="status-dot err";document.getElementById("connText").textContent="Disconnected";};}
-function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;availableControllers=d.controllers.map(c=>c.name);const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");const jic=d.controllers.find(c=>c.name==="joint_impedance_controller");jointControllerActive=jic&&jic.state==="active";const jtc=d.controllers.find(c=>c.name==="forward_position_controller");jointTrajControllerActive=jtc&&jtc.state==="active";if(jointControllerActive)jointControlMode='impedance';else if(jointTrajControllerActive)jointControlMode='trajectory';else jointControlMode=null;const cic=d.controllers.find(c=>c.name==="cartesian_impedance_controller");cartControllerActive=cic&&cic.state==="active";updateJointCtrlBtns();updateCartCtrlBtn();
+function refreshControllers(){fetch("/api/controllers").then(r=>r.json()).then(d=>{if(!d.ready)return;availableControllers=d.controllers.map(c=>c.name);const div=document.getElementById("ctrlList");const cs=d.controllers.sort((a,b)=>a.state==="active"&&b.state!=="active"?-1:a.state!=="active"&&b.state==="active"?1:a.name.localeCompare(b.name));div.innerHTML=cs.map(c=>{const br=c.name.includes("broadcaster"),ac=c.state==="active",sw=!br&&!ac;return`<div class="ctrl-item"><span class="name">${c.name}</span><span><span class="badge ${c.state}">${c.state}</span>${sw?`<button onclick="switchCtrl('${c.name}')">Activate</button>`:''}</span></div>`;}).join("");const jic=d.controllers.find(c=>c.name==="joint_impedance_controller");jointControllerActive=jic&&jic.state==="active";const myjic=d.controllers.find(c=>c.name==="my_joint_impedance_controller");myJointControllerActive=myjic&&myjic.state==="active";const jtc=d.controllers.find(c=>c.name==="forward_position_controller");jointTrajControllerActive=jtc&&jtc.state==="active";if(jointControllerActive)jointControlMode='impedance';else if(myJointControllerActive)jointControlMode='my_impedance';else if(jointTrajControllerActive)jointControlMode='trajectory';else jointControlMode=null;const cic=d.controllers.find(c=>c.name==="cartesian_impedance_controller");cartControllerActive=cic&&cic.state==="active";updateJointCtrlBtns();updateCartCtrlBtn();
 // Populate param controller dropdown dynamically
 const sel=document.getElementById("paramCtrlSelect");const curVal=sel.value;sel.innerHTML='<option value="">-- select --</option>';d.controllers.filter(c=>!c.name.includes("broadcaster")&&c.name!=="joint_state_broadcaster").sort((a,b)=>a.name.localeCompare(b.name)).forEach(c=>{const o=document.createElement("option");o.value=c.name;o.textContent=c.name;sel.appendChild(o);});sel.value=curVal;
 }).catch(()=>{});}
@@ -585,8 +586,8 @@ function renderParams(c,p){
   }
   ct.innerHTML=h||'<div style="color:var(--dim)">No parameters</div>';
 }
-function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_;const optCb=in_?`<input type="checkbox" class="opt-cb" title="Include in optimization" ${optSelectedParams[c+'::'+n]?'checked':''} onchange="optToggleParam('${c}','${n}',${v},this.checked)">`:'';return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${ib?'bool':in_?'num':t}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}',${ib})">Set</button>`:''}${optCb}</div>`;}
-function setParam(c,n,id,ib){const el=document.getElementById(id);let v=ib?el.value==='true':parseFloat(el.value);if(!ib&&isNaN(v)){document.getElementById("paramLog").innerHTML='<div class="err">Invalid number</div>';return;}const l=document.getElementById("paramLog");l.innerHTML=`<div>Setting ${n} = ${v}...</div>`;fetch(`/api/params/${c}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({params:{[n]:v}})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Set ${n} = ${v}</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
+function paramRowHtml(c,n,v){const t=typeof v,ib=t==='boolean',in_=t==='number',ia=Array.isArray(v)&&v.length>0&&v.every(x=>typeof x==='number'),id=`param_${n.replace(/\./g,'_')}`;let inp;if(ib)inp=`<select id="${id}" style="padding:3px 6px;background:var(--bg);border:1px solid var(--accent);color:var(--text);border-radius:3px;font-family:monospace;font-size:0.85em;"><option value="true" ${v?'selected':''}>true</option><option value="false" ${!v?'selected':''}>false</option></select>`;else if(in_)inp=`<input type="number" id="${id}" value="${v}" step="any">`;else if(ia)inp=`<input type="text" id="${id}" value="[${v.join(', ')}]" style="min-width:240px;font-family:monospace;">`;else inp=`<input type="text" id="${id}" value="${v}" readonly style="opacity:0.5">`;const cs=ib||in_||ia;const optCb=in_?`<input type="checkbox" class="opt-cb" title="Include in optimization" ${optSelectedParams[c+'::'+n]?'checked':''} onchange="optToggleParam('${c}','${n}',${v},this.checked)">`:'';const kind=ib?'bool':in_?'num':ia?'num[]':t;return`<div class="param-row"><span class="pname">${n}</span>${inp}<span class="ptype">${kind}</span>${cs?`<button class="pbtn" onclick="setParam('${c}','${n}','${id}','${ib?'bool':in_?'num':'arr'}')">Set</button>`:''}${optCb}</div>`;}
+function setParam(c,n,id,kind){const el=document.getElementById(id);let v;if(kind==='bool'){v=el.value==='true';}else if(kind==='num'){v=parseFloat(el.value);if(isNaN(v)){document.getElementById("paramLog").innerHTML='<div class="err">Invalid number</div>';return;}}else if(kind==='arr'){const raw=el.value.trim().replace(/^\[|\]$/g,'');const parts=raw.split(/[,\s]+/).filter(s=>s.length);v=parts.map(s=>parseFloat(s));if(v.some(x=>isNaN(x))){document.getElementById("paramLog").innerHTML='<div class="err">Invalid array (use comma- or space-separated numbers)</div>';return;}}else{return;}const l=document.getElementById("paramLog");l.innerHTML=`<div>Setting ${n} = ${JSON.stringify(v)}...</div>`;fetch(`/api/params/${c}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({params:{[n]:v}})}).then(r=>r.json()).then(d=>{l.innerHTML=d.success?`<div class="ok">Set ${n} = ${JSON.stringify(v)}</div>`:`<div class="err">${d.error}</div>`;}).catch(e=>{l.innerHTML=`<div class="err">${e}</div>`;});}
 
 // === Real-time Plot ===
 const PLOT_MAX_SAMPLES = 6000; // 60s at ~100Hz
@@ -1025,12 +1026,14 @@ function switchTab(tab) {
 
 // --- Joint Controller Toggle ---
 let jointControllerActive = false;
+let myJointControllerActive = false;
 let jointTrajControllerActive = false;
-let jointControlMode = null; // null, 'impedance', or 'trajectory'
+let jointControlMode = null; // null, 'impedance', 'my_impedance', or 'trajectory'
 let jointSendingActive = false;
 
 function updateJointCtrlBtns() {
   const btnImp = document.getElementById("btnJointCtrl");
+  const btnMy = document.getElementById("btnMyJointCtrl");
   const btnTraj = document.getElementById("btnJointTrajCtrl");
   if (jointControllerActive) {
     btnImp.textContent = "Disable Joint Impedance Controller";
@@ -1038,6 +1041,15 @@ function updateJointCtrlBtns() {
   } else {
     btnImp.textContent = "Enable Joint Impedance Controller";
     btnImp.style.background = "var(--accent)";
+  }
+  if (btnMy) {
+    if (myJointControllerActive) {
+      btnMy.textContent = "Disable My Joint Impedance Controller";
+      btnMy.style.background = "var(--green)";
+    } else {
+      btnMy.textContent = "Enable My Joint Impedance Controller";
+      btnMy.style.background = "var(--accent)";
+    }
   }
   if (jointTrajControllerActive) {
     btnTraj.textContent = "Disable Joint Position Controller";
@@ -1050,9 +1062,10 @@ function updateJointCtrlBtns() {
 
 function toggleJointController(mode) {
   const log = document.getElementById("jointLog");
-  const isImpedance = mode === 'impedance';
-  const ctrlName = isImpedance ? "joint_impedance_controller" : "forward_position_controller";
-  const isActive = isImpedance ? jointControllerActive : jointTrajControllerActive;
+  let ctrlName, isActive;
+  if (mode === 'impedance') { ctrlName = "joint_impedance_controller"; isActive = jointControllerActive; }
+  else if (mode === 'my_impedance') { ctrlName = "my_joint_impedance_controller"; isActive = myJointControllerActive; }
+  else { ctrlName = "forward_position_controller"; isActive = jointTrajControllerActive; }
   if (!isActive) {
     log.innerHTML = `<div>Activating ${ctrlName}...</div>`;
     fetch("/api/switch_controller", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({controller:ctrlName})})
