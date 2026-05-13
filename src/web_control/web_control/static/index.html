@@ -1058,13 +1058,12 @@ function toggleJointController(mode) {
     fetch("/api/switch_controller", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({controller:ctrlName})})
       .then(r => r.json()).then(d => {
         if (d.success) {
-          log.innerHTML = `<div class="ok">${ctrlName} activated. Sliders auto-snapped to current pose; move a slider to command motion.</div>`;
-          // Auto-snap target sliders to the CURRENT joint pose and start
-          // streaming so the robot immediately tracks slider input. Sliders
-          // matching the current pose means NO motion until the user drags
-          // one — this fixes the common "I enabled joint impedance but the
-          // robot does not follow my sliders" confusion (Start Sending was
-          // gated separately).
+          log.innerHTML = `<div class="ok">${ctrlName} activated. Sliders snapped to current pose; press "Start Sending" to begin streaming.</div>`;
+          // Snap target sliders to the CURRENT joint pose so that whenever
+          // the user later presses Start Sending the very first
+          // /api/set_target_joint POST commands the current pose (no jerk).
+          // Streaming itself is left OFF intentionally — the user
+          // explicitly opts in via the Start Sending button.
           if (latestJoints) {
             for (let i = 0; i < 6; i++) {
               const deg = latestJoints[i] * 180 / Math.PI;
@@ -1075,11 +1074,8 @@ function toggleJointController(mode) {
                 document.getElementById("jtgtVal" + i).value = deg.toFixed(1);
               }
             }
-            if (!jointSendingActive) {
-              toggleJointSending();
-            }
           } else {
-            log.innerHTML += '<div class="err">Joint state not yet received; press "Start Sending" manually after sliders show current values.</div>';
+            log.innerHTML += '<div class="err">Joint state not yet received; sliders may show stale values. Wait a moment, then drag a slider to refresh before pressing Start Sending.</div>';
           }
         }
         else { log.innerHTML = `<div class="err">${d.error}</div>`; }
