@@ -579,6 +579,27 @@ Joint order: `shoulder_pan_joint`, `shoulder_lift_joint`, `elbow_joint`, `wrist_
 | `http://localhost:8091` | joint_vla_control | VLA joint control (optional) |
 | `http://localhost:8092` | joint_history_vla_control | VLA history-action joint control (optional) |
 
+> **Opening dashboard ports in UFW.** All dashboards bind to `0.0.0.0` so
+> `http://localhost:<port>` works from the host machine even with `ufw`
+> active (the loopback interface is allowed by default). If you want to
+> reach a dashboard from **another machine on the LAN** (e.g. an operator
+> laptop), open the corresponding port in UFW. Open only the dashboards
+> you actually use, scoped to your LAN subnet:
+>
+> ```bash
+> LAN_CIDR=192.168.1.0/24   # adjust to your network
+> for p in 8080 8085 8086 8088 8090; do
+>   sudo ufw allow from "$LAN_CIDR" to any port $p proto tcp \
+>     comment "ur15_crisp dashboard $p"
+> done
+> sudo ufw reload
+> ```
+>
+> If you don't want to scope by subnet, replace `from "$LAN_CIDR" to any`
+> with just the port (`sudo ufw allow 8086`). That opens the port to any
+> host that can reach the machine \u2014 fine for a closed lab network, not
+> recommended on shared/public networks.
+
 ### Key configuration files
 
 | File | Purpose |
