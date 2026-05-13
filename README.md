@@ -25,7 +25,7 @@ sudo apt install -y ros-humble-ur-robot-driver ros-humble-pinocchio \
   ros-humble-generate-parameter-library \
   python3-pip python3-flask python3-serial
 pip3 install --upgrade "pip>=22" "setuptools>=59,<70"
-pip3 install h5py
+pip3 install -r requirements.txt   # flask, optuna, rich, h5py, numpy, scipy
 rosdep install --from-paths src --ignore-src -r -y
 
 # 4. Build (use -j1 if RAM < 8 GB to avoid OOM)
@@ -53,6 +53,26 @@ ros2 launch ur15_bringup ur15_crisp_sim.launch.py
 ```
 
 ## Launching on Real Hardware
+
+> **First-time setup on a new PC — open the firewall.** Ubuntu's `ufw`
+> ships with default deny incoming. The UR driver needs **four inbound TCP
+> ports** open from the robot (50001-50004) or the robot's URScript cannot
+> connect back, and every controller will silently "succeed" without
+> moving the robot. Run once per host:
+>
+> ```bash
+> ROBOT_IP=192.168.1.15
+> for p in 50001 50002 50003 50004; do
+>   sudo ufw allow from "$ROBOT_IP" to any port $p proto tcp \
+>     comment "UR URScript reverse $p"
+> done
+> sudo ufw reload
+> ```
+>
+> Verify after launching the driver: `ss -tn | grep "$ROBOT_IP"` should
+> show ESTABLISHED *inbound* lines to ports 50001/50003/50004. If absent,
+> a deny rule (UFW, iptables, or the corporate VPN) is still in the way —
+> see [Troubleshooting](#troubleshooting).
 
 If the robot is in **remote control mode** (no access to teach pendant), use the following sequence:
 
@@ -293,6 +313,14 @@ The current `ur15_controllers.yaml` has been tested on real UR15 hardware with t
 | `cartesian_impedance_controller` | k_pos=600, d_pos=200, k_rot=30, d_rot=30 | Holds EE pose, compliant to perturbation |
 | `joint_impedance_controller` | k_eff=50/10 (shoulder/wrist), d_eff=40/8 | Holds joint config, smooth return |
 
+> **Joint impedance under the hood**: CRISP does not ship a dedicated joint
+> impedance plugin. `joint_impedance_controller` is the same
+> `crisp_controllers/CartesianController` class with `task.k_pos_*` and
+> `task.k_rot_*` set to zero and a non-zero `nullspace.stiffness` \u2014 i.e.
+> the task wrench is null and the nullspace projector becomes identity, so
+> the output torque reduces to PD on joint position. It is fed by
+> `/target_joint` (`sensor_msgs/JointState`).
+
 ## Using `crisp_py` (Python Interface)
 
 [crisp_py](https://github.com/utiasDSL/crisp_py) provides a high-level Python API for controlling the robot. It is included as a submodule at `src/crisp_py`.
@@ -497,6 +525,8 @@ ur15_crisp/
 
 ## Quick Reference
 
+### Controller commands
+
 | Action | Command |
 |---|---|
 | Launch (mock) | `ros2 launch ur15_bringup ur15_crisp.launch.py use_mock_hardware:=true` |
@@ -509,14 +539,176 @@ ur15_crisp/
 | Check EE pose | `ros2 topic echo /current_pose --once` |
 | Check FT sensor | `ros2 topic echo /ft_data --once` |
 | Record rosbag | `ros2 bag record /joint_states /ft_data /current_pose /target_pose -o test_bag` |
-
-## Quick Reference
-
-| Action | Command |
-|---|---|
 | Power on (remote) | `ros2 service call /dashboard_client/power_on std_srvs/srv/Trigger` |
 | Brake release | `ros2 service call /dashboard_client/brake_release std_srvs/srv/Trigger` |
 | Check robot mode | `ros2 service call /dashboard_client/get_robot_mode ur_dashboard_msgs/srv/GetRobotMode` |
+| Resend URScript (after firewall fix) | `ros2 service call /io_and_status_controller/resend_robot_program std_srvs/srv/Trigger` |
+
+### Controller names (sim vs real)
+
+| Function | Real robot | Simulation |
+|---|---|---|
+| Freedrive / gravity comp | `gravity_compensation` | `crisp_gravity_compensation` |
+| Cartesian impedance | `cartesian_impedance_controller` | `cartesian_impedance_controller` |
+| Joint impedance | `joint_impedance_controller` | `joint_impedance_controller` |
+| Position trajectory | `scaled_joint_trajectory_controller` | `joint_trajectory_controller` |
+
+### ROS 2 topics
+
+| Topic | Type | Description |
+|---|---|---|
+| `/joint_states` | `sensor_msgs/JointState` | Joint positions, velocities, efforts |
+| `/current_pose` | `geometry_msgs/PoseStamped` | EE pose (`base_link` frame) |
+| `/target_pose` | `geometry_msgs/PoseStamped` | Cartesian target (`base_link` frame) |
+| `/target_joint` | `sensor_msgs/JointState` | Joint target angles |
+| `/commanded_torques` | `sensor_msgs/JointState` | CRISP-computed torques |
+| `/ft_data` | `geometry_msgs/WrenchStamped` | FT sensor (real robot only) |
+
+Joint order: `shoulder_pan_joint`, `shoulder_lift_joint`, `elbow_joint`, `wrist_1_joint`, `wrist_2_joint`, `wrist_3_joint`.
+
+### Web dashboards
+
+| URL | Package | Description |
+|---|---|---|
+| `http://localhost:8000` | ur_simulator | Sim 3D viewer (sim mode only) |
+| `http://localhost:8080` | web_control | Robot control UI + gripper teleop bridge |
+| `http://localhost:8085` | ur15_dashboard | UR15 3D viewer |
+| `http://localhost:8086` | data_collection | Data collection UI |
+| `http://localhost:8088` | robotiq_2f140_gripper_web | Gripper control |
+| `http://localhost:8090` | alicia_duo_leader_dashboard | Leader arm status |
+| `http://localhost:8091` | joint_vla_control | VLA joint control (optional) |
+| `http://localhost:8092` | joint_history_vla_control | VLA history-action joint control (optional) |
+
+> **Opening dashboard ports in UFW.** All dashboards bind to `0.0.0.0` so
+> `http://localhost:<port>` works from the host machine even with `ufw`
+> active (the loopback interface is allowed by default). If you want to
+> reach a dashboard from **another machine on the LAN** (e.g. an operator
+> laptop), open the corresponding port in UFW. Open only the dashboards
+> you actually use, scoped to your LAN subnet:
+>
+> ```bash
+> LAN_CIDR=192.168.1.0/24   # adjust to your network
+> for p in 8080 8085 8086 8088 8090; do
+>   sudo ufw allow from "$LAN_CIDR" to any port $p proto tcp \
+>     comment "ur15_crisp dashboard $p"
+> done
+> sudo ufw reload
+> ```
+>
+> If you don't want to scope by subnet, replace `from "$LAN_CIDR" to any`
+> with just the port (`sudo ufw allow 8086`). That opens the port to any
+> host that can reach the machine \u2014 fine for a closed lab network, not
+> recommended on shared/public networks.
+
+### Key configuration files
+
+| File | Purpose |
+|---|---|
+| `config/robot_config.yaml` | Robot IP, tool offset, camera config |
+| `config/joint_config.yaml` | Leader arm joint mapping (auto-created from template) |
+| `src/ur15_bringup/config/ur15_controllers_template.yaml` | Real-robot controller parameters |
+| `config/ur15_sim_controllers.yaml` | Simulation controller parameters |
+
+## Troubleshooting
+
+### Robot doesn't move even though controllers report `active`
+
+This is almost always a network/firewall issue: the ROS 2 trajectory action
+only checks local interpolation time, so it reports `error_code=0` even when
+the URScript on the robot never connected back to the driver.
+
+**Diagnose:**
+```bash
+ss -tn | grep 192.168.1.15           # expect ESTABLISHED inbound to :50001/:50003/:50004
+sudo ufw status verbose | grep 5000  # confirm 50001-50004 allowed from robot IP
+```
+If `ss` shows no inbound connections, add the UFW rules from the
+[Launching on Real Hardware](#launching-on-real-hardware) section, then run:
+```bash
+ros2 service call /io_and_status_controller/resend_robot_program std_srvs/srv/Trigger
+```
+No driver restart needed. Re-check `ss` \u2014 three ESTABLISHED lines should
+appear.
+
+> **Note on the `reverse_ip=0.0.0.0` red herring.** This is the standard
+> "auto-detect from routing table" value used by the UR Client Library; do
+> not hardcode it unless you have multi-homed routing.
+
+### Dashboard sliders don't move the robot (joint impedance)
+
+The web dashboard separates *controller activation* from *target streaming*.
+With the current code (post-fix), clicking **Enable Joint Impedance
+Controller** auto-snaps the sliders to the current pose and starts streaming
+in one click. If you ever see the controller as `active` but the robot does
+not respond:
+
+```bash
+ros2 topic hz /target_joint                                # expect ~250 Hz
+ros2 topic echo /target_joint --once
+ros2 param get /joint_impedance_controller nullspace.stiffness
+```
+
+Common causes:
+- `Start Sending` was toggled off \u2014 check the button colour in the UI.
+- `nullspace.stiffness` is too low. Effective per-joint stiffness is
+  `nullspace.stiffness \u00d7 nullspace.weights.<joint>.value`; if you reduced
+  one of these you may need 50\u2013200 N\u00b7m/rad on the heavy joints.
+- The slider already matches `q_meas`, so `(q_ref - q)` is zero and `tau_d`
+  is zero. Drag the slider further.
+
+### Build is OOM-killed
+
+`crisp_controllers` instantiates heavy Pinocchio + Eigen templates. With less
+than 8 GB of RAM the compiler is liable to be killed:
+
+```bash
+# Either limit parallelism
+MAKEFLAGS="-j1" colcon build --symlink-install --parallel-workers 1
+# Or add swap
+sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile \
+  && sudo mkswap /swapfile && sudo swapon /swapfile
+```
+
+### `crisp_py` installs as `UNKNOWN`
+
+The default pip on Ubuntu 22.04 cannot parse `pyproject.toml` correctly.
+Upgrade pip first, and pin setuptools below 70 (newer setuptools breaks
+colcon `--symlink-install`):
+
+```bash
+pip3 install --upgrade "pip>=22" "setuptools>=59,<70"
+pip3 install src/crisp_py        # no -e
+```
+
+### `gravity_compensation` collapses the robot in simulation
+
+In simulation the controller name `gravity_compensation` is already taken by
+the simulator's own gravity-comp node. Use `crisp_gravity_compensation`
+instead (only in sim). Real-robot launches keep the original name.
+
+### Two dashboard clients fight over RTDE
+
+`ur15_crisp.launch.py` already includes its own dashboard client. Running a
+second `ur_dashboard_client.launch.py` against the same robot causes
+`speed_slider_mask is currently controlled by another RTDE client`. Kill the
+extra dashboard client process \u2014 the launch file's bundled one is enough.
+
+### Stale simulator processes block a re-launch
+
+```bash
+pkill -9 -f \"ign gazebo\"
+pkill -f rosbridge
+pkill -f server.py
+```
+
+### Serial device permission denied (`/dev/ttyACM0`)
+
+Used by the Alicia leader arm and Robotiq gripper.
+
+```bash
+sudo usermod -aG dialout $USER   # log out / back in afterwards
+groups $USER                     # should include 'dialout'
+```
 
 ## References
 

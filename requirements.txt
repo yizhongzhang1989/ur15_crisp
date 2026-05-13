@@ -1,0 +1,25 @@
+# Python (pip) dependencies for the ur15_crisp workspace.
+# Anything that is NOT covered by `sudo apt install` / `rosdep install` belongs here.
+# Install with:
+#
+#     pip3 install -r requirements.txt
+#
+# (Add --user if you are not in a venv and don't want a system-wide install.)
+#
+# Note: `crisp_py` (the Python helper library at src/crisp_py) is installed
+# separately via `pip3 install src/crisp_py`. It is NOT listed below because
+# it lives in this repo as a git submodule.
+
+# --- web_control (Flask dashboard + auto-tune) ---
+flask
+optuna          # required by web_control/auto_opt.py (controller auto-tuning)
+
+# --- crisp_py utilities & examples ---
+rich            # used by crisp_py/utils/diagnostics_viewer.py
+
+# --- data_collection / bag_to_dataset ---
+h5py
+
+# --- scientific stack (also installed via apt, listed here for completeness) ---
+numpy
+scipy
