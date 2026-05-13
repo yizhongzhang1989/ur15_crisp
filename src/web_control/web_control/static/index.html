@@ -1057,7 +1057,31 @@ function toggleJointController(mode) {
     log.innerHTML = `<div>Activating ${ctrlName}...</div>`;
     fetch("/api/switch_controller", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({controller:ctrlName})})
       .then(r => r.json()).then(d => {
-        if (d.success) { log.innerHTML = `<div class="ok">${ctrlName} activated</div>`; }
+        if (d.success) {
+          log.innerHTML = `<div class="ok">${ctrlName} activated. Sliders auto-snapped to current pose; move a slider to command motion.</div>`;
+          // Auto-snap target sliders to the CURRENT joint pose and start
+          // streaming so the robot immediately tracks slider input. Sliders
+          // matching the current pose means NO motion until the user drags
+          // one — this fixes the common "I enabled joint impedance but the
+          // robot does not follow my sliders" confusion (Start Sending was
+          // gated separately).
+          if (latestJoints) {
+            for (let i = 0; i < 6; i++) {
+              const deg = latestJoints[i] * 180 / Math.PI;
+              jointSliderTargets[i] = deg;
+              const tgtEl = document.getElementById("jtgt" + i);
+              if (tgtEl) {
+                tgtEl.value = deg;
+                document.getElementById("jtgtVal" + i).value = deg.toFixed(1);
+              }
+            }
+            if (!jointSendingActive) {
+              toggleJointSending();
+            }
+          } else {
+            log.innerHTML += '<div class="err">Joint state not yet received; press "Start Sending" manually after sliders show current values.</div>';
+          }
+        }
         else { log.innerHTML = `<div class="err">${d.error}</div>`; }
         refreshControllers();
       }).catch(e => { log.innerHTML = `<div class="err">${e}</div>`; });

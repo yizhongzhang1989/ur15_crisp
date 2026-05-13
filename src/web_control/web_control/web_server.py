@@ -554,7 +554,57 @@ class WebControlServer:
             if not controller_name:
                 return jsonify({"error": "Missing 'controller' field"}), 400
             try:
+                # Before activating a CRISP impedance/joint controller, snap
+                # _cmd_target_raw to the current joint values. Otherwise
+                # _cmd_pub_timer_cb early-returns (raw=None) and /target_joint
+                # is never published, so the controller has no external target
+                # and the robot just locks at its on_activate pose — which
+                # users typically read as "joint impedance not working".
+                if controller_name in _CRISP_CONTROLLERS:
+                    try:
+                        joints = self.robot.joint_values
+                        if joints is not None:
+                            self._cmd_target_raw = [float(j) for j in joints]
+                    except Exception:
+                        pass
+
                 self.robot.controller_switcher_client.switch_controller(controller_name)
+
+                # Verify the controller actually became active. crisp_py uses
+                # BEST_EFFORT strictness, so the underlying service call can
+                # report success even when the hardware-interface claim
+                # failed (e.g. UR driver mode mismatch, conflicting active
+                # controller). Without this check the dashboard would show
+                # a green "Disable …" button while no torques are commanded.
+                verified_active = True
+                actual_state = None
+                try:
+                    ctrl_list = self.robot.controller_switcher_client.get_controller_list()
+                    verified_active = False
+                    for c in ctrl_list:
+                        if c.name == controller_name:
+                            actual_state = c.state
+                            if c.state == "active":
+                                verified_active = True
+                            break
+                except Exception:
+                    # If verification itself fails, fall back to trusting the
+                    # switch return value rather than masking a real success.
+                    verified_active = True
+
+                if not verified_active:
+                    return jsonify({
+                        "error": (
+                            f"Controller '{controller_name}' switch reported success "
+                            f"but the controller is currently '{actual_state}', not 'active'. "
+                            "This usually means a hardware-interface conflict: another "
+                            "controller still claims the required interface, or the UR "
+                            "driver's External Control URCap is not in the matching mode. "
+                            "Check `ros2 control list_controllers` and the UR pendant."
+                        ),
+                        "controller": controller_name,
+                        "state": actual_state,
+                    }), 500
                 return jsonify({"success": True, "controller": controller_name})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
